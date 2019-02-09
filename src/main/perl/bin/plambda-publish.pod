@@ -1,0 +1,47 @@
+=pod
+
+=head1 NAME
+
+publish
+
+=head1 SYNOPSIS
+
+ plambda publish lambda
+
+=head1 DESCRIPTION
+
+Publishes the latest Lambda revision and returns the fully qualifed
+Lambda ARN.
+
+I<Note:> The version will be published only if the Lambda service
+determines that the package is different from the most recent
+published version.
+
+=head1 PARAMETERS
+
+=over 5
+
+=item * lambda
+
+Publish the latest Lambda revision.
+
+=back
+
+=head1 OPTIONS
+
+=over 5
+
+=item * --dryrun
+
+Reports the operation to be performed but does not actually execute
+the call.
+
+=back
+
+=head1 SEE ALSO
+
+ plambda list help
+
+ aws lambda publish-version help
+
+=cut

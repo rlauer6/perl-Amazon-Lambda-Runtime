@@ -1,0 +1,24 @@
+version: @PACKAGE_VERSION@
+programs:
+  make:
+    path: @MAKE@
+  aws_cli:
+    path: @aws_cli@
+  pod2man:
+    path: @pod2man@
+  scandeps:
+    enabled: yes
+    path: @scandeps@
+    args:
+      - "-Rc"
+installdir: @datadir@/plambda
+builddir: src/main/perl/lambda
+create-role: no
+# default Lambda runtime environment configuration
+runtime-environment:
+  perl:
+    version: 5.16.3
+cpan:
+  mirror-only: ~
+  mirror: ~
+stub-file: ~

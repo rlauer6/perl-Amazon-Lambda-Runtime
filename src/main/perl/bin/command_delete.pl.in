@@ -1,0 +1,34 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+# delete various things: runtime layer deleteup, code deleteup
+sub command_delete {
+  my %args = @_;
+  my %options = %{$args{options}};
+  my @parms = @{$options{parms}};
+  my ($handler, $module, $plambda) = @args{qw/handler module plambda/};
+
+  foreach ("$parms[0]") {
+    /all/ && do {
+      command_delete_runtime_layers(options => \%options, plambda => $plambda);
+      command_delete_function(options => \%options,  module => $module, plambda => $plambda);
+      last;
+    };
+      
+    /^(runtime|layer)/ && do {
+      command_delete_runtime_layers(options => \%options, module => $module, plambda => $plambda);
+      last;
+    };
+    
+    /^(function|lambda)/ && do {
+      command_delete_function(options => \%options, module => $module, plambda => $plambda);
+      last;
+    };
+
+    fatal_error("unknown parameter");
+  }
+}
+
+1;

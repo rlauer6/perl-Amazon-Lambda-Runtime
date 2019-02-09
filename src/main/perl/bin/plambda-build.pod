@@ -1,0 +1,57 @@
+=pod
+
+=head1 NAME
+
+build
+
+=head1 SYNOPSIS
+
+ plambda build runtime
+
+=head1 DESCRIPTION
+
+Builds the runtime or Lambda zip file. After a successful run, the zip
+files can be found in F<$PLAMBDA_HOME/.plambda> directory.  The
+runtime zip file will be named F<perl-runtime.zip>.  The Lambda
+zipfile will be the named based on your Lambda name (name of the Perl
+module containing your handler).
+
+The C<build> command requires that you have created a F<buildspec.yml>
+file and successfully executing the C<config> command.
+
+Whenver you update your F<buildspec.yml> file, you'll need to rebuild
+and install your Lambda.
+
+=head1 OPTIONS
+
+=over 5
+
+=item * --dryrun
+
+Reports what operations would be performed, but does not perform
+them. Do not use C<--force> and C<--dryrun> together for obvious
+reasons.
+
+=item * --force
+
+Forces a build of the runtime or Lambda package.
+
+=item * --no-scandeps
+
+Normally, if you modify your Lambda or use the C<--force> option,
+I<plambda> will re-run F<scandeps.pl> to freshen your F<cpanfile>.
+This may not be what you want if you have been manually maintaining
+that file. This is especially true if you encounter one or more
+errors when C<cpanm> attempts to install certain modules.  In that
+case, use the C<--no-scandeps> option to prevent clobbering your
+F<cpanfile>.
+
+=back
+
+=head1 SEE ALSO
+
+ plambda config
+ plambda install
+
+=cut
+

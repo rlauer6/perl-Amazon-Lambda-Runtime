@@ -1,0 +1,5 @@
+#!@bashrun@
+
+# Perl Lambda Utility
+
+@libexecdir@/plambda-driver.pl "$@"

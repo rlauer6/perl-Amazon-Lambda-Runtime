@@ -1,0 +1,77 @@
+#!/bin/bash
+
+# plambda project intialization script
+
+# (c) Copyright 2019 Robert C. Lauer. All rights reserved.  This
+# is free software. It may be used, redistributed and/or
+# modified under the same terms as Perl itself.
+
+function make_error {
+    
+    if test -s ${PLAMBDA_LOG}; then
+        echo "ERROR: Check $PLAMBDA_LOG"
+    fi
+    
+    exit 1
+}
+
+# +--------------------+
+# | SCRIPT STARTS HERE |
+# +--------------------+
+
+if test -n "$1"; then
+    if ! test -d "$prefix" && test -w "$prefix"; then
+        echo "$prefix does not exist or is not writable"
+        exit 1;
+    fi
+    
+    prefix="--prefix $1"
+fi
+
+if ! test -e configure; then
+    echo "ERROR: no 'configure' found. Run from the projec root."
+fi
+
+test -d .plambda || mkdir .plambda
+
+if test -z "$HOME"; then
+    HOME=$(pwd);
+fi
+
+PLAMBDA_LOG=${HOME}/.plambda/plambda.log
+PLAMBDA_CONFIG=${HOME}/.plambda/plambda.yml
+
+test -d ${HOME}/.plambda || mkdir ${HOME}/.plambda
+
+# if this script is run by root, then by user, then the log file
+# might not be writable by the user, so let everyone write to it
+if [ "$(id -u)" = "0" ]; then
+    touch $PLAMBDA_LOG
+    chmod o+w plambda.log
+fi
+
+# naked configure to just install utilities...
+./configure $prefix --with-perl5libdir=yes >>$PLAMBDA_LOG
+
+if [ "$(id -u)" = "0" ]; then
+    chmod 0666 config.log
+    chmod 0666 config.status
+fi
+
+trap 'make_error' ERR
+set -o pipefail
+
+for a in bash/bin perl/lib perl/bin; do
+    pushd src/main/$a >/dev/null
+    make clean >>$PLAMBDA_LOG 2>&1 && make install >>$PLAMBDA_LOG 2>&1
+    popd >/dev/null
+    eval $(grep '^prefix=' config.log)
+done
+
+if ! test -e "$PLAMBDA_CONFIG"; then
+    if test -n "$prefix"; then
+        cp $prefix/share/plambda/plambda.yml $PLAMBDA_CONFIG
+    fi
+fi
+
+exit 0;

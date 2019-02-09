@@ -1,0 +1,40 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+sub command_list {
+  my %args = @_;
+  my %options = %{$args{options}};
+  my @parms = @{$options{parms}};
+  my ($handler, $module, $plambda) = @args{qw/handler module plambda/};
+  
+  help(error => "nothing to list", command => $options{command}, plambda => $plambda)
+    unless @parms;
+  
+  for ("$parms[0]") {
+    $options{sub_command} = $parms[0];
+    /roles/ && do {
+      $options{role} = $options{role} || $parms[1];
+      command_list_roles(options => \%options);
+      last;
+    };
+    
+    /(layer|runtime)s?/ && do {
+      $options{layer} = $options{layer} || $parms[1];
+      
+      command_list_layers(options => \%options);
+      last;
+    };
+
+    /(lambda|function)s?/ && do {
+      $options{function} = $options{function} || $parms[1];
+      command_list_functions(options => \%options);
+      last;
+    };
+    
+    fatal_error("invalid parameter: $_");
+  }
+}
+
+1;

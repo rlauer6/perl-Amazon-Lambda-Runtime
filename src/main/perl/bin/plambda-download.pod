@@ -1,0 +1,47 @@
+=pod
+
+=head1 NAME
+
+download
+
+=head1 SYNOPSIS
+
+ plambda download runtime
+
+=head1 DESCRIPTION
+
+Downloads the most recent or a specified version of the custom Perl
+runtime layer (CPRL).  You download the CPRL to inject the runtime
+into your build tree so that the system can package your Lambda in the
+context of that particular version of the CPRL.
+
+By downloading a runtime into your build tree, you'll be able to
+produce the smallest Lambda packages necessary in order to run your
+handler.
+
+Your Lambda must have a runtime to build against, therefore if you do
+not download a runtime, one will be built and installed for you.
+
+After running the C<download> command you'll have these artifacts in
+your build tree:
+
+=over 5
+
+=item * runtime-cpanfile.yml
+
+=item * runtime-cpanspec
+
+=back
+
+=head1 OPTIONS
+
+=over 5
+
+=item * --version
+
+Specify the version of the runtime to download.
+
+=back
+
+=cut
+

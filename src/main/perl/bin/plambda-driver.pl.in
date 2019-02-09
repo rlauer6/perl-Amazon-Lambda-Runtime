@@ -1,0 +1,906 @@
+#!@perlenv@
+
+use strict;
+use warnings;
+
+BEGIN {
+  
+  use lib '@perl5libdir@', '@datadir@/perl5', '@libexecdir@';
+  
+}
+
+# Utility to assist in developing Perl Lambdas
+# ...this is a POC to tease out requirements
+
+use Cwd;
+
+use Amazon::Plambda;
+
+use Data::Dumper;
+use Date::Format;
+
+use Digest::MD5::File qw/file_md5/;
+use MIME::Base64;
+
+use File::Basename;
+use File::Copy;
+use File::Slurp;
+use File::Temp qw/:POSIX/;
+use File::Touch;
+
+use Getopt::Long qw(:config no_ignore_case );
+
+use IPC::Run3;
+
+use JSON;
+
+use Term::ANSIColor;
+use Text::ASCIITable;
+
+use Scalar::Util qw/reftype/;
+use YAML::Syck;
+
+use Amazon::Plambda::Message qw/fatal_error warning_message non_fatal_error red green yellow orange blue/;
+
+require 'command_install.pl';
+require 'command_list_layers.pl';
+require 'command_download.pl';
+require 'command_view.pl';
+require 'command_parse_config.pl';
+require 'command_invoke.pl';
+require 'command_publish.pl';
+require 'command_clean.pl';
+require 'command_list_roles.pl';
+require 'command_list_versions.pl';
+require 'command_delete_function.pl';
+require 'command_delete_runtime_layers.pl';
+require 'command_delete.pl';
+require 'command_init.pl';
+require 'command_list_functions.pl';
+require 'command_state.pl';
+require 'command_list.pl';
+require 'command_set.pl';
+require 'command_config.pl';
+
+my $AWS_CLI;
+my $MAKE;
+my $POD2MAN;
+my $SCANDEPS;
+
+# +----------------------------+
+# | AUTOCONF/CONFIGURE OPTIONS |
+# +----------------------------+
+
+my %CONFIGURE = (
+                 HANDLER()            => undef,
+                 AWS_PROFILE()        => undef,
+                 AWS_ACCOUNT()        => undef,
+                 ROLE()               => undef,
+                 PERL_VERSION()       => undef,
+                 VPC_CONFIG()         => undef,
+                 ENVIRONMENT()        => undef,
+                 REGION()             => undef,
+                 TIMEOUT()            => undef
+                );
+
+
+# +-----------+
+# |  LOGGING  |
+# +-----------+
+
+my $LOG_LEVEL;
+my $LOG_FILE;
+
+my  %LOG_LEVELS = (
+                   debug => 1,
+                   info  => 2,
+                   warn  => 3,
+                   error => 4,
+                   fatal => 5
+                  );
+
+sub _logger {
+  my @tm = localtime(time);
+  my $level = shift;
+  my $message = shift;
+    
+  if ( ref($message) && reftype($message) eq 'CODE' ) {
+    $message = $message->();
+  }
+  
+  $message = $message . join('', @_)
+    if @_;
+  
+  open my $fh, '>>', $LOG_FILE or die "could not open plambda.log for writing.";
+  print $fh sprintf("[%s] %s: %s", strftime("%c", @tm), $level, $message . "\n");
+  close $fh;
+}
+
+sub log {
+  my $level = shift;
+  
+  my $cur_level = $LOG_LEVELS{$LOG_LEVEL || 'info'} || 2;
+  unshift @_, $level;
+  
+  $level = $LOG_LEVELS{$level} || 2;
+
+  if ( $level >= $cur_level) {
+    _logger(@_);
+  }
+}
+
+sub log_debug { &log('debug', @_); }
+sub log_info  { &log('info',  @_); }
+sub log_warn  { &log('warn',  @_); }
+sub log_error { &log('error', @_); }
+sub log_fatal { &log('fatal', @_); }
+  
+# +--------+
+# |  HELP  |
+# +--------+
+
+sub help {
+  my %args = @_;
+  
+  my ($error, $command, $plambda) = @args{qw/error command plambda/};
+  
+  print "ERROR: $error\n\n"
+    if $error;
+  
+  # command help?
+  unless ($command) { 
+    print <<eot;
+usage: plambda [options] command [parameterss]
+
+Note: not all options are availabe for all commands.  Try 'plambda command help'.
+
+Options
+-------
+--account         your AWS account number
+--all             command specific modifier
+--color           display errors/warnings in color
+                  (default: 1, can be negated with --no-color)
+--config, -c      name of the YAML build file (default: buildspec.yml)
+--dryrun, -d      do not execute the command, just report what will be executed
+--force, -f       force operation
+--handler, -H     name of the Lambda handler (module.function, Ex: MyLambda.handler)
+--help, -h        this help
+--lambda, -L      specifies operation to be performed in the context of the
+                  Lambda package (always the default when there is an
+                  option between 'runtime' and 'lambda')
+--layer           Layer name
+--log-level, -l   log level (debug, info, warn, error, fatal, default: info)
+--long, -x        use long version of descriptions         
+--old, -O         only delete older versions
+--outfile, -o     speficies the name of the output file
+--raw,-R          output raw JSON from AWS CLI
+--region          AWS region, if not provide, will be read from CLI config
+--role            the role associated with your Lambda
+--runtime, -r     specifies operation to be performed in the context of the Perl custom runtime
+--scandeps        prevent plambda from boinking your cpanfile
+                  (default: 1, can be negated with --no-scandeps)
+--stub-file       name of a file to use to create a stub for your Lambda
+--table, -t       output in ASCII formatted table
+--update-version  update the runtime layer version in the buildspec whenever a new runtime is built
+                  (default: 1, can be negated with --no-update-version)
+--verbose, =V     provide verbose output
+--version, -v     specifies the version of Lambda function or runtime layer
+
+Note: Try 'plambda command help' for more info on each command.
+
+Available Commands
+------------------
+build
+clean
+config
+delete
+deploy
+download
+help
+init              
+install
+invoke
+list
+publish
+set
+state
+
+Copyright (c) 2019 Robert C. Lauer. All rights reserved.  This is free
+software. It may be used, redistributed and/or modified under the same
+terms as Perl itself.
+eot
+
+  }
+  else {
+    my $path = $plambda->get_installdir . '/plambda';
+    my $pod = $path . '/plambda-' . $command . '.pod';
+    
+    if ( -e $pod ) {
+      exec "$POD2MAN --center 'Perl Lambda Framework' $pod | man -l -";
+    }
+  }
+
+  exit;
+}
+
+# +--------------------+
+# | RUN SHELL COMMAND |
+# +--------------------+
+
+sub run_shell_command {
+  my %args = @_;
+
+  # default is to handle errors!
+  my $handle_errors = $args{handle_errors} // 1;
+  
+  my @cmd = @{$args{command}};
+  
+  fatal_error("no command to run")
+    unless @cmd;
+  
+  my ($in, $out, $err);
+  
+  print STDERR join(' ', @cmd)
+    if $args{verbose};
+  
+  run3 \@cmd, $in, \$out, \$err;
+  
+  my $retcode = $?;
+  
+  log_info($out)
+    if $out;
+
+  log_error($err)
+    if $err;
+  
+  fatal_error($err || $out || 'unknown error: ' . $retcode )
+    if $handle_errors && $retcode;
+  
+  return { retcode => $retcode, out => $out, err => $err };
+}
+
+# +------------------+
+# | AWS CLI COMMANDS |
+# +------------------+
+
+sub aws_cli {
+  my %args = @_;
+  
+  fatal_error("cli_cmd must be array")
+    unless reftype($args{cli_cmd}) eq 'ARRAY';
+
+  my @cli_cmd = @{$args{cli_cmd}};
+
+  log_debug(Dumper \@cli_cmd);
+  
+  $args{output} = 'json'
+    unless $args{output};
+
+  my $out;
+  
+  unless ( $args{dryrun} ) {
+    my @cmd = ($AWS_CLI,  @cli_cmd);
+
+    my $result = run_shell_command(command => \@cmd, handle_errors => 1);
+
+    if ( $result->{out} && $args{output} ne 'raw' ) {
+      $out = from_json($result->{out});
+    }
+    elsif ( $result->{out}) {
+      $out = $result->{out};
+    }
+  }
+  
+  return $out;
+}
+
+sub aws_get_region {
+  return aws_cli( cli_cmd => [ qw/configure get region/], output => 'raw', @_ );
+}
+
+sub aws_get_account {
+  return aws_cli(cli_cmd => [ qw/sts get-caller-identity/], output => 'raw', @_ );
+}
+
+sub delete_layer_version {
+  my %args = @_;
+
+  return aws_cli(cli_cmd => [ qw/lambda delete-layer-version --layer-name/, $args{layer_name}, "--version-number", $args{version}], %args);
+}
+
+sub invoke {
+  my %args = @_;
+  
+  my ($module, $version, $context, $payload, $outfile, $invocation_type, $log_type) = @args{qw/module version context payload outfile invocation_type log_type/};
+
+  fatal_error("module name is missing")
+    unless $module;
+  
+  return aws_cli(cli_cmd => [ qw/lambda invoke --function-name/, $module,
+                              '--invocation-type', $invocation_type,
+                              $version ? ('--qualifier', $version) : (),
+                              $context ? ('--client-context', $context) : (),
+                              $payload ? ('--payload', "$payload") : (),
+                              '--log-type', $log_type,
+                              $outfile], %args);
+}
+
+sub delete_function {
+  my %args = @_;
+  
+  my @version = $args{version} ? ('--qualifier ' , $args{version}) : ();
+
+  return aws_cli(cli_cmd => [ qw/lambda delete-function --function/, $args{module}, @version], %args);
+}
+
+
+sub get_layer_version {
+  my %options = @_;
+  
+  return aws_cli( cli_cmd => [qw/lambda get-layer-version --layer-name/, $options{layer_name}, '--version-number', $options{version}], %options);
+}
+
+
+sub list_roles {
+  my %options = @_;
+  return aws_cli(cli_cmd => [qw/iam list-roles --no-paginate --path-prefix/, $options{path_prefix}]);
+}
+
+sub list_functions {
+  my %options = @_;
+  
+  return aws_cli(cli_cmd => [qw /lambda list-functions/], output => $options{output}, %options);
+}
+
+sub list_versions_by_function {
+  my %options = @_;
+  
+  my $module = $options{module};
+
+  my $output = aws_cli(cli_cmd => [ qw/lambda list-versions-by-function --function-name/, $module], %options);
+
+  if ( $output ) {
+    $output = [ sort { $a <=> $b } map { $_->{Version} eq '$LATEST' ? () : $_->{Version} } @{$output->{Versions}} ];
+  }
+
+  return $output;
+}
+
+sub list_layer_versions {
+  my %options = @_;
+  
+  my $layer_name = $options{layer_name};
+  
+  return aws_cli(cli_cmd => [ qw/lambda list-layer-versions --layer-name/, $layer_name], %options);
+}
+
+sub list_layers {
+  return aws_cli(cli_cmd => [qw/lambda list-layers/], @_);
+}
+
+sub get_function {
+  my %options = @_;
+
+  return aws_cli(cli_cmd => [qw/lambda get-function --function-name/, $options{function_name}], %options);
+}
+
+sub publish_layer_version {
+  my %options = @_;
+  
+  return aws_cli(cli_cmd => [qw/lambda publish-layer-version/,
+                             '--layer-name', $options{layer_name},
+                             '--description', $options{description},
+                             '--zip-file', 'fileb://' . $options{zip_file}
+                            ], %options);
+}
+
+sub get_layer_description {
+  my $layer = get_layer_version(@_);
+  
+  $layer->{Description};
+}
+
+sub get_latest_perl_layer {
+  my $layers = list_layers();
+
+  my $perl_version;
+  my $perl_layer;
+  my $perl_layer_version;
+ 
+  if ( $layers ) {
+    # look for the most recent version of perl in all the Perl layers
+    # and the version of the perl-runtime
+    
+    foreach my $layer (@{$layers->{Layers}}) {
+      my $layer_name = $layer->{LayerName};
+                
+      # is this a Perl layer? e.g. perl-5_28_1 ?
+      if ( $layer_name =~/^(perl\-5_\d+_\d+)$/ ) {
+        $perl_layer = $1;
+        $perl_version = $perl_layer;
+        $perl_version =~s/perl\-//;
+        $perl_version =~s/_/\./g;
+        $perl_layer_version = $layer->{LatestMatchingVersion}->{Version};
+        last;
+      } 
+    }
+  }
+
+  return  $perl_version ? { version => $perl_version, layer => $perl_layer, layer_version => $perl_layer_version } : undef;
+}
+
+sub get_latest_runtime_layer {
+  my $layer_name;
+  my $layer_version;
+  my $layer_description;
+  
+  if ( my $layers = list_layers() ) {
+    # look for the most recent version of perl in all the Perl layers
+    # and the version of the perl-runtime
+    
+    foreach my $layer (@{$layers->{Layers}}) {
+      $layer_name = $layer->{LayerName};
+                
+      if ( $layer_name =~/^perl\-runtime$/ ) {
+        $layer_version = $layer->{LatestMatchingVersion}->{Version};
+        $layer_description = from_json($layer->{LatestMatchingVersion}->{Description})
+          if $layer->{LatestMatchingVersion}->{Description};
+        
+        last;
+      }
+      else {
+        $layer_name = '';
+      }
+    }
+  }
+
+  return  $layer_name ? { layer => $layer_name, description => $layer_description, layer_version => $layer_version } : undef;
+}
+ 
+sub get_functions_by_runtime {
+  my $functions = list_functions;
+  
+  my @function_list = ($functions && reftype($functions->{Functions}) eq 'ARRAY') ? @{$functions->{Functions}} : ();
+  my %function_map;
+  
+  foreach my $f (@function_list) {
+    next unless $f->{Layers};
+    my @layers = @{$f->{Layers}};
+    
+    foreach my $l (@layers) {
+      if ( $l->{Arn} =~/:perl\-runtime:/ ) {
+        $function_map{$f->{FunctionName}} = (split ':', $l->{Arn})[7];
+        last;
+      }
+    }
+  }
+  
+  return (keys %function_map) ? \%function_map : undef;
+}
+
+sub get_function_details {
+  my %args = @_;
+  
+  my $module = $args{function};
+  my $plambda = $args{plambda};
+  
+  my $meta_data_file = $plambda->builddir . "/$module";
+  
+  return (-s $meta_data_file) ? from_json(read_file($meta_data_file)) : undef;
+}
+
+
+# returns a list of available custom Perl runtime version sorted in
+# descending order (numerically)
+sub get_available_runtimes {
+  my $output = list_layer_versions(layer_name => 'perl-runtime');
+
+  return $output ? sort { $b <=> $a } map { $_->{Version} } @{$output->{LayerVersions}} : ();
+}
+
+sub get_available_perl_versions {
+  my $output = list_layers;
+  my @perl_versions;
+  
+  if ( $output && reftype($output) eq 'HASH') {
+    foreach ( @{$output->{Layers}} ) {
+      if ( $_->{LayerName} =~ /^perl\-(5_\d+_\d+)$/ ) {
+        my $v = $1;
+        $v =~s/_/\./g;
+        push @perl_versions, $v;
+      }
+    }
+  }
+  
+  @perl_versions = sort { $b cmp $a } @perl_versions;
+  
+  return @perl_versions;
+}
+
+# +---------------------+
+# | BUILDSPEC FUNCTIONS |
+# +---------------------+
+
+# update version in buildspec
+sub check_buildspec_runtime_version {
+  my %args = @_;
+  my %options = %{$args{options}};
+  
+  my ($handler, $module, $plambda)  = @args{qw/handler module plambda/};
+  my $version = $args{version};
+  
+  my $layers = $plambda->get_lambda_config->get_layers || {};
+    
+  if ( $layers->{'perl-runtime'} ) {
+    my $current_version = $layers->{'perl-runtime'}->{version};
+    log_debug("current version $current_version version: $version");
+    set_runtime_version(%args, version => $version)
+      unless $current_version eq $version;
+  }
+}
+
+# prevent rebuild of Lambda - used after automatic updates to
+# buildspec.yml that should not trigger a new build
+sub prevent_rebuild {
+  my %args = @_;
+  
+  my $module = $args{function};
+  my $plambda = $args{plambda};
+  
+  my @filelist = (
+                  $plambda->get_plambda_home . "/buildspec.yml",
+                  $plambda->get_plambda_home . "/config.log",
+                  $plambda->get_plambda_home . "/$module.pm",
+                  $plambda->builddir . "/lib/$module.pm.in",
+                  $plambda->builddir . "/lib/$module.pm",
+                  $plambda->get_plambda_home . '/cpanfile',
+                  $plambda->builddir . '/lambda-libs',
+                  $plambda->builddir . "/$module.zip",
+                  $plambda->builddir . "/$module",
+                 );
+
+  foreach ( @filelist ) {
+    touch $_;
+  }
+}
+
+sub get_runtime_layer_arn {
+  my %args = @_;
+  
+  my $plambda = $args{plambda};
+
+  my $runtime_layer_arn_file = $plambda->builddir . '/runtime_layer_arn';
+  my $arn;
+
+  if ( -e $runtime_layer_arn_file ) {
+    my $runtime_layer_arn = read_file($runtime_layer_arn_file);
+    
+    chomp $runtime_layer_arn;
+    
+    if ( $runtime_layer_arn =~/(perl\-runtime):(\d+)$/ ) {
+      $arn = {
+              arn => $runtime_layer_arn,
+              layer => $1,
+              layer_version =>  $2,
+              qualified_layer => "$1:$2"
+             };
+    }
+  }
+  
+  return $arn;
+}
+
+# +--------------+
+# | IS UTILITIES |
+# +--------------+
+
+sub _make_query {
+  my %args = @_;
+  
+  my $target = $args{target};
+  
+  my $plambda = $args{plambda};
+  
+  die "plambda object undefined\n"
+    unless $plambda;
+  
+  my $pwd = getcwd;
+  
+  chdir $plambda->builddir;
+  
+  my $result = make('-q', $target);
+
+  chdir $pwd;
+  
+  return $result->{retcode} ? 0 : 1;
+}
+
+sub is_lambda_current {
+  my %args = @_;
+
+  $args{target} = $args{target} || 'lambda';
+  
+  _make_query(target => $args{target}, plambda => $args{plambda} );
+}
+
+sub is_runtime_current {
+  my %args = @_;
+  my $plambda = $args{plambda};
+
+  $args{target} = $args{target} || 'runtime-layer';
+  
+  _make_query(target => $args{target}, plambda => $plambda);
+}
+
+# see if buildspec.yml has changes since last config
+sub is_config_current {
+
+  my $result = make('-q', 'check-config');
+  
+  return $result->{retcode} ? 0 : 1;
+}
+
+sub is_runtime_built {
+  my %args = @_;
+  my $plambda = $args{plambda};
+  
+  my $runtime_layer_arn = get_runtime_layer_arn(plambda => $plambda);
+  
+  return $runtime_layer_arn ? sprintf("%s:%s", @{$runtime_layer_arn}{qw/layer layer_version/}) : "";  
+}
+
+sub fetch_function {
+  my %options = @_;
+
+  my $result = run_shell_command(command => [ 'plambda-utils', 'fetch-function', $options{function}], handle_errors => 1);
+
+  return $result->{out};
+}
+
+# +--------+
+# |  MAKE  |
+# +--------+
+
+sub make {
+  return run_shell_command(command => [$MAKE, @_], handle_errors => 0); 
+}
+
+sub get_sha256 {
+  my %options = @_;
+  
+  my $result = run_shell_command(command => ['plambda-utils', 'sha256', $options{file}], handle_errors => 1);
+  
+  return $result->{out};
+}
+
+sub set_runtime_version {
+  my %args = @_;
+  
+  $args{options}->{parms} = [ '/layers/perl-runtime/version', $args{version} ];
+  $args{options}->{command} = 'set';
+  command_set(%args);
+}
+
+sub configure {
+  my %args = @_;
+  
+  $args{options}->{command} = 'config';
+  my @cmd = command_config(%args, configure => \%CONFIGURE);
+
+  run_shell_command(command => \@cmd, handle_errors => 1);
+}
+
+sub run_command {
+  my %args = @_;
+  
+  my $command = $args{command};
+  my $options = $args{options};
+  my $plambda = $args{plambda};
+  
+  my ($handler, $module) = eval {
+    my $handler = $plambda->get_lambda_config->get_handler;
+    
+    my ($module) = split /\./, $handler
+      if $handler;
+    
+    ($handler, $module);
+  };
+
+  for ("$command") {
+
+    /^config$/ && do {
+      my @cmd = command_config(configure => \%CONFIGURE, command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      run_shell_command( command => \@cmd, handle_errors => 1 );
+      last;
+    };
+
+    /list\-versions/ && do {
+      command_list_versions(command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      last;
+    };
+  
+    /list/ && do {
+      command_list( command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      last;
+    };
+
+    /init/ && do {
+      command_init( command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      last;
+    };
+
+    /set/ && do {
+      command_set( command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      last;
+    };
+  
+    /delete/ && do {
+      command_delete( command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      last;
+    };
+
+    /install/ && do {
+      $options->{install} = 'install';
+      command_install( command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      last;
+    };
+
+    /clean/ && do {
+      command_clean( command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      last;
+    };
+    
+    /build/ && do {
+      $options->{install} = 'build';
+      command_install( command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      last;
+    };
+
+    /deploy/ && do {
+      $options->{install} = 'deploy';
+      command_install( command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      last;
+    };
+
+    /publish/ && do {
+      command_publish( command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      last;
+    };
+
+    /^parse\-config/ && do {
+      command_parse_config( command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      last;
+    };
+
+    /^state$/ && do {
+      command_state( command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      last;
+    };
+
+    /invoke/ && do {
+      command_invoke( command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      last;
+    };
+
+    /^view$/ && do {
+      command_view( command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      last;
+    };
+
+    /^download$/ && do {
+      command_download( command => $command, options => $options, handler => $handler, module => $module, plambda => $plambda);
+      last;
+    };
+      
+    /help/ && do {
+      help(plambda => $plambda);
+      
+      last;
+    };
+  
+    fatal_error("unknown command $command");
+  }
+}
+
+# +-------------------------+
+# | MAIN SCRIPT STARTS HERE |
+# +-------------------------+
+
+my %options;
+
+unless  ( GetOptions(\%options,
+                     "all|a",
+                     "alias=s",
+                     "account=s",
+                     "color!",
+                     "dryrun|d",
+                     "force|f",
+                     "handler|H=s",
+                     "help",
+                     "layer=s",
+                     "log-level|l=s",
+                     "long|x",
+                     "old|O",
+                     "outfile|o=s",
+                     "raw|R",
+                     "region=s",
+                     "role=s",
+                     "runtime|r",
+                     "table|t",
+                     "scandeps!",
+                     "stub-file=s",
+                     "verbose|V",
+                     "update-version!",
+                     "version|v=s"
+                    )
+        ) {
+  exit 1;
+}
+
+$LOG_LEVEL = $options{'log-level'} || $ENV{LOG_LEVEL} || 'info';
+
+# unload commands/parameters
+
+my $command = shift @ARGV // "";
+my @command_parms = @ARGV;
+
+$options{command} = $command;
+$options{parms} = \@command_parms;
+
+my $plambda = new Amazon::Plambda({ options => \%options});
+
+mkdir -d $plambda->get_home . '/.plambda';
+
+$LOG_FILE = $plambda->get_home . '/.plambda/plambda.log';
+$AWS_CLI  = $plambda->get_plambda_config->get_programs->{aws_cli}->{path};
+$MAKE     = $plambda->get_plambda_config->get_programs->{make}->{path};
+$POD2MAN  = $plambda->get_plambda_config->get_programs->{pod2man}->{path};
+$SCANDEPS = $plambda->get_plambda_config->get_programs->{scandeps}->{path};
+
+log_debug(Dumper [
+                  'options:', Dumper \%options,
+                  'command: ', $command,
+                  'parameters: ', \@command_parms
+                 ] );
+
+
+# process help
+
+$command = 'help'
+  if $options{help};
+
+help(error => "missing command", plambda => $plambda)
+  unless $command;
+
+# command help
+help(command => $command_parms[0], plambda => $plambda)
+  if $command eq 'help' && @command_parms;
+
+# make sure we are running from project root
+
+if ( $ENV{PLAMBDA_HOME} ) {
+  if ( $command ne 'parse-config' ) {
+    warning_message("you are not in your project home (PLAMBDA_HOME=" . $ENV{PLAMBDA_HOME} . ") directory!")
+      unless getcwd eq $ENV{PLAMBDA_HOME};
+  } 
+  
+  chdir $ENV{PLAMBDA_HOME};
+  
+  fatal_error("no 'configure' found.")
+    unless -e "configure";
+  
+  # create the .plambda directory if not found
+  if ( ! -d  ".plambda" ) {
+    fatal_error("could not create .plambda directory.")
+      unless mkdir ".plambda";
+  }
+}
+else {
+  fatal_error("set PLAMBDA_HOME to your project directory!");
+}
+
+
+$ENV{ANSI_COLORS_DISABLED} = 1
+  if ! $plambda->color;
+
+run_command(command => $command, options => \%options, plambda => $plambda);

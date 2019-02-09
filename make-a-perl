@@ -1,0 +1,205 @@
+#!/bin/bash
+# -*- mode:sh; -*-
+
+# make-a-perl
+
+function help {
+    test -n "$1" && echo "$1 is a required argument."
+    cat <<EOF
+usage: make-a-perl options
+
+Launch an EC2 instance, build a version of Perl, copy to a bucket? and shutdown.
+
+Required Options
+----------------
+-v     version - the version of perl to build (e.g. 5.28.1) - required
+-a     ami-id  - the AMI id to launch
+
+Options
+-------
+-k     ssh key (defaults to the key used on your instance - if available)
+-i     instance type (default: t3.micro)
+-s     subnet-id
+-g     security group id(s)
+-p     instance profile name (not the Arn)
+-A     account number (defaults to the account associated with your credentials)
+-b     bucket name - zip file will be copied this bucket if provided
+-x     terminate instance after completion - note the shutdown behavior is always set to terminate!
+
+Hints/Tips
+----------
+- Choose an AMI from this list:
+  
+   https://github.com/awslabs/aws-support-tools/tree/master/Lambda/DeploymentPackages
+
+- Make sure you have IAM permissions to start an instance
+
+- If you want to login to the EC2, don't set the -x option
+  * Set a subnet (-s) and a security group (-g) so you can 
+    actually login to the instance - best to choose a private subnet!
+  * Use the -k option to override the default use of your instance's key
+
+- If you want to just make-a-perl, copy it to a bucket and boogey:
+  * Use the -b option to set a bucket name your zip-file will
+    be writtent to s3://{bucket}/perl/{version}/perl-{version}.zip
+  * Use the -p option to set an instance profile that has permissions
+    to write the bucket you've specified with the -b option
+
+EOF
+    exit 1
+}
+
+OPTS=$(getopt -o ha:A:v:p:s:g:k:i:r:b:x -- "$@")
+
+if [ $? -ne 0 ]; then
+    echo "could not parse options"
+    exit $?
+fi
+
+eval set -- "$OPTS"
+
+if test -z "$1"; then
+    echo "make-a-perl version"
+    exit;
+fi
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h)
+            help;
+            ;;
+        
+        -x)
+            terminate="$1";
+            shift;
+            ;;
+        
+        -v)
+            version="$2";
+            shift;
+            shift;
+            ;;
+        
+        -b)
+            bucket="$2";
+            shift;
+            shift;
+            ;;
+        
+        -r)
+            region="$2";
+            shift;
+            shift;
+            ;;
+        
+        -k)
+            key="$2";
+            shift;
+            shift;
+            ;;
+        
+        -p)
+            profile="$2";
+            shift;
+            shift;
+            ;;
+        
+        -g)
+            security_group_ids="$2";
+            shift;
+            shift;
+            ;;
+        
+        -s)
+            subnet_id="$2";
+            shift;
+            shift;
+            ;;
+        
+        -i)
+            instance_type="$2";
+            shift;
+            shift;
+            ;;
+        
+        -a)
+            ami_id="$2";
+            shift;
+            shift;
+            ;; 
+        -A)
+            account="$2";
+            shift;
+            shift;
+            ;;
+        
+	--)
+	    break;
+	    ;;
+	*)
+	    break;
+	    ;;
+    esac
+done
+
+# +----------+
+# | DEFAULTS |
+# +----------+
+
+test -z "$account" &&  account=$(aws sts get-caller-identity | jq -r .Account)
+test -z "$instance_type" && instance_type=t3.micro
+test -z "$region" && region=$(aws configure get region)
+test -z "$key" && key=$(curl --connect-timeout 1 -s http://169.254.169.254/latest/meta-data/public-keys/ | cut -f2 -d=)
+
+# +--------------------+
+# | OPTIONAL ARGUMENTS |
+# +--------------------+
+
+test -n "$subnet_id" && subnet_id_option="--subnet-id $subnet_id"
+test -n "$security_group_ids" && security_group_ids_option="--security-group-ids $security_group_ids"
+test -n "$profile" && profile="arn:aws:iam::$account:instance-profile/$profile"
+test -n "$profile" && instance_profile_option="--iam-instance-profile Arn=$profile"
+
+# +--------------------+
+# | REQUIRED ARGUMENTS |
+# +--------------------+
+
+test -z "$ami_id" && help "ami-id";
+test -z "$version" && help "version";
+test -z "$key" && help "key";
+
+cat >perl-layer <<eof
+#!/bin/bash
+
+sudo yum -y install gcc
+sudo yum -y install patch
+cd /tmp
+wget http://www.cpan.org/src/5.0/perl-$version.tar.gz
+tar xfvz perl-$version.tar.gz 
+cd perl-$version
+./Configure -des -Dprefix=/opt/perl-$version -Dman1dir=none -Dman3dir=none
+make
+make install DESTDIR=/tmp
+cd /tmp/opt
+bucket="$bucket"
+zip -r -9 /tmp/perl-$version.zip perl-$version/*
+test -n "$bucket" && aws s3 cp /tmp/perl-$version.zip "s3://$bucket/perl/$version/perl-$version.zip"
+test -n "$terminate" && shutdown -h now
+eof
+
+instance_id=$(aws ec2 run-instances $instance_profile_option \
+                  --instance-type $instance_type \
+                  --region $region \
+                  --image-id $ami_id \
+                  --instance-initiated-shutdown-behavior terminate \
+                  --key-name $key \
+                  --output text \
+                  --query "Instances[].[InstanceId]" \
+                  --user-data file://perl-layer \
+                  $subnet_id_option $security_group_ids_option
+           )
+
+if test -n "$instance_id"; then
+    ip=$(aws ec2 describe-instances --instance-ids "$instance_id" | jq -r '.Reservations[].Instances[].PrivateIpAddress')
+    echo "$instanc_id $ip"
+fi

@@ -1,0 +1,46 @@
+=pod
+
+=head1 NAME
+
+clean
+
+=head1 SYNOPSIS
+
+plamba clean
+
+=head1 DESCRIPTION
+
+Removes the working copies of the custom Perl runtime layer and your
+Lambda function from your project directory tree.  Additionally
+removes all Perl modules from the cache directory.
+
+I<CAUTION: This also has the effect or removing your cpanfile and the
+runtime-cpanfile which contain the dependencies for your Lambda and
+the runtime layer.>
+
+After running the C<clean> command, you will need to re-run the
+C<config> command before building your runtime or Lambda.
+
+You can restrict cleaning to just your Lambda by adding the command
+modifier C<lambda>.
+
+ plambda clean lambda
+
+This command B<does not> delete your function or custom Perl runtime
+layer from the AWS environment.  Use the C<delete> function if you
+want to delete those artifacts.
+
+=head1 OPTIONS
+
+=over 5
+
+=item * --dryrun
+
+=back
+
+=head1 SEE ALSO
+
+ plambda delete
+
+=cut
+

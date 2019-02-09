@@ -1,0 +1,19 @@
+#!@bashrun@
+# -*- mode: sh; -*-
+
+# Perl Lambda Runtime
+
+rootdir=/opt/local
+perl5libdir=$rootdir/lib/perl5
+perl_version="@perl_layer_version@"
+
+module="$(echo $_HANDLER | cut -d. -f1)"
+
+# it's possible to use the Perl runtime framework with the system
+# version of Perl...but by convention we'd prefer a Perl version
+# installed as a Lambda layer
+if test -n "$perl_version"; then
+    export PATH=/opt/perl-$perl_version/bin:$PATH
+fi
+
+@perlenv@ -I $perl5libdir -I $LAMBDA_TASK_ROOT/local/lib/perl5 /opt/plambda.pl $module

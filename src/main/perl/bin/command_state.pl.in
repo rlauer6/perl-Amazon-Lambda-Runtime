@@ -1,0 +1,132 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+use Data::Dumper;
+
+sub command_state {
+  my %args = @_;
+  my %options = %{$args{options}};
+  my @parms = @{$options{parms}};
+  my ($handler, $module, $plambda) = @args{qw/handler module plambda/};
+
+  my $sub_command = $parms[0] || 'lambda';
+
+  for ("$sub_command") {
+    /^lambda$/ && do {
+      my $status = {
+                    Installed => red('no'),
+                    Name => $module,
+                    Module => (! -e "$module.pm") ? red("$module.pm") : (is_lambda_current(plambda => $plambda, target => 'lambda-pkg') ? green("$module.pm") : yellow("$module.pm")),
+                    CodeCurrent => red('re-build'),
+                    Runtime => red('none')
+                   };
+      
+      # state of function in AWS environment
+      my $installed_function_details = eval {
+        get_function(function_name => $module);
+      };
+
+      # if resource not found, it's ok...
+      if ( $@ ) {
+        die $@
+          unless $@ =~/ResourceNotFoundException/;
+        $status->{CodeCurrent} = red('deploy');
+      }
+      
+      my $function_details = get_function_details(function => $module, plambda => $plambda);
+      my $runtime_layer_arn = get_runtime_layer_arn(plambda => $plambda);
+    
+      log_debug( Dumper [ $installed_function_details, $function_details]);
+    
+      if ( $installed_function_details ) {
+        $status->{Installed} = green('yes');
+      
+        if ( $function_details && $function_details->{LastModified} eq $installed_function_details->{Configuration}->{LastModified} ) {
+          # check sha256
+          if ( -e $plambda->builddir . "/$module.zip" ) {
+            my $sha256 = get_sha256(file => $plambda->builddir . "/$module.zip");
+            chomp $sha256;
+
+            if ( $sha256 eq $installed_function_details->{Configuration}->{CodeSha256} ) {
+              $status->{CodeCurrent} = green('current');
+            }
+            else {
+              $status->{CodeCurrent} = red('re-install');
+            }
+          }
+        }
+        
+        # this state may indicate that the current working environment
+        # is not in sync with the state of the deployed lambda, otoh,
+        # someone might have just done a 'make clean' and we are in
+        # fact 'good-to-go' as long as we update the information in
+        # the build directory...this would entail:
+        #
+        # 1. fetching the zip file...unzipping the package and restoring the state of the lambda
+        # 2. syncing the runtime environment by fetching that as well
+        #
+        # this might be done as a 'restore' command?
+        
+        elsif ( ! $function_details ) {
+          $status->{CodeCurrent} = red('re-deploy');
+        }
+      
+        my $layers = $installed_function_details->{Configuration}->{Layers};
+        my $runtime;
+      
+        if ( $layers ) {
+          foreach ( @$layers ) {
+            if ( $_->{Arn} =~/(perl\-runtime:\d+)$/ ) {
+              $runtime = $1;
+              last;
+            }
+          }
+        }
+
+        # if the runtime specified in the buildspec is not the same as
+        # the one that is currently built or downloaded
+        # (runtime_layer_arn) then colorize as yellow...
+        if ( $runtime ) {
+          my $buildspec_layers = $plambda->get_lambda_config->get_layers || {};
+          my $buildspec_runtime = $buildspec_layers->{'perl-runtime'} ? sprintf("perl-runtime:%s", $buildspec_layers->{'perl-runtime'}->{version}) : '';
+        
+          # the runtime configured is the same same as the buildspec?
+          if ( $buildspec_runtime eq $runtime ) {
+            $status->{Runtime} = green($runtime);
+          }
+          else {
+            $status->{Runtime} = yellow($runtime);
+            $status->{CodeCurrent} = red('re-install')
+              unless $status->{CodeCurrent} eq 're-deploy';
+          }
+        
+          if ( $runtime_layer_arn && $runtime_layer_arn->{qualified_layer} ne $buildspec_runtime ) {
+            $status->{Runtime} = red($runtime);
+          }
+          elsif ( ! $runtime_layer_arn ) {
+            $status->{Runtime} = yellow($runtime);
+          }
+        }
+        else {
+          $status->{Runtime} = yellow('none');
+        }
+      }
+      else {
+        $status->{CodeCurrent} = yellow('---');
+        $status->{Runtime} = is_runtime_current(plambda => $plambda) ? green($runtime_layer_arn->{qualified_layer}) : (is_runtime_current(plambda => $plambda, target => 'runtime-pkg') ? yellow('---') : red('---'));
+      }
+      
+      my $t = new Text::ASCIITable({headingText => "$module State", allowANSI => 1});
+      $t->setCols('Name', 'Module', "Installed", "Function", "CPRL");
+      $t->addRow(@{$status}{qw/Name Module Installed CodeCurrent Runtime/});
+      print $t;
+      last;
+    };
+        
+    fatal_error("invalid or no parameter");
+  }
+}
+
+1;

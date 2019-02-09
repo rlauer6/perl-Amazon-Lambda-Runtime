@@ -1,0 +1,33 @@
+#!@perlenv@
+
+use strict;
+use warnings;
+
+my $lambda = shift;
+
+require "$lambda.pm";
+
+$lambda->new->run;
+
+exit 0;
+
+=pod
+
+=head1 NAME
+
+plambda.pl
+
+=head1 SYNOPSIS
+
+ /usr/bin/perl -I $perl5libdir -I $LAMBDA_TASK_ROOT/local/lib/perl5 /opt/plambda.pl $module
+
+=head1 DESCRIPTION
+
+Stub driver that invokes your AWS Lambda method.  Part of the Perl Lambda Runtime system.
+
+=head1 AUTHOR
+
+Rob Lauer - <rlauer6@comcast.net>
+
+=cut
+

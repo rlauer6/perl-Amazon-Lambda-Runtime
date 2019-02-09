@@ -1,0 +1,43 @@
+=pod
+
+=head1 NAME
+
+set
+
+=head1 SYNOPSIS
+
+ plambda set /aws/account 1234567891
+ plambda set /environment/LOG_LEVEL debug
+
+=head1 DESCRIPTION
+
+Set a value in the buildspec file. Use a path notation to set a value:
+
+ plambda set path value
+
+To set array values preface the array name with '+'
+
+ plambda set /vpc-config/+securitygroup-ids sg-6758969
+
+To remove array values preface the array name with '-'
+
+ plambda set /vpc-config/-securitygroup-ids sg-6758969
+
+To set a member value, make sure the member is the final element of the path
+
+ plambda set /aws/region us-east-1
+
+=head1 OPTIONS
+
+=over 5
+
+=item * --dryrun
+
+Outputs modified buildspec to STDOUT.
+
+=back
+
+=head1 SEE ALSO
+
+=cut
+

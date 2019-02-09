@@ -1,0 +1,56 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+use Data::Dumper;
+
+sub command_delete_runtime_layers {
+  my %args = @_;
+  my %options = %{$args{options}};
+  
+  my $module = $args{module};
+  my $plambda = $args{plambda};
+  
+  my $runtimes = list_layer_versions(layer_name => 'perl-runtime');
+  my $functions_by_runtime = get_functions_by_runtime();
+  my $runtime_layer_arn = get_runtime_layer_arn(plambda => $plambda);
+  
+  log_debug(sub { Dumper [$runtimes] });
+  
+  my @versions;
+  my $latest_version;
+  
+  if ( $runtimes ) {
+    @versions = sort { $b <=> $a } map { $_->{Version} } @{$runtimes->{LayerVersions}};
+    $latest_version = $versions[0];
+    
+    unless ( $options{all} ) {
+
+      if ( $options{old} ) {
+        shift @versions;
+      }
+      elsif ( $options{version} ) {
+        @versions = $options{version};
+      }
+    }
+  }
+  
+  foreach my $v (@versions) {
+    if ( $functions_by_runtime->{$module} && $functions_by_runtime->{$module} eq $v ) {
+      non_fatal_error("version $v is currently in use by function '$module'");
+    }
+    else {
+      no warnings 'uninitialized';
+      
+      if ( $runtime_layer_arn && $runtime_layer_arn->{version} eq $v && ! $options{force} ) {
+        warning_message("use force option to delete active runtime: (perl-runtime:$v)");
+      }
+      else {
+        print sprintf("%s...deleting version: %s\n", $options{dryrun} ? "(dryrun)" : "", $v);
+        delete_layer_version(layer_name => 'perl-runtime', version => $v, %options);
+      }
+    }
+  }
+}
+1;

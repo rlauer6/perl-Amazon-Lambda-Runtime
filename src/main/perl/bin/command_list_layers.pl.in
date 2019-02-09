@@ -1,0 +1,72 @@
+#!/bin/env perl
+
+use Text::ASCIITable;
+use Amazon::Plambda::Message qw/:all/;
+
+sub command_list_layers {
+  my %args = @_;
+  my %options = %{$args{options}};
+  
+  my $is_runtime = $options{sub_command} && $options{sub_command} eq 'runtime';
+  
+  my $output = $options{layer} ? list_layer_versions(layer_name => $options{layer}) : list_layers;
+  log_debug('list-layers: ', $output);
+  
+  if ( $output ) {
+    my @layers = $options{layer} ? @{$output->{LayerVersions}} : @{$output->{Layers}};
+    
+    if ( $is_runtime ) {
+      @layers = map { $_->{LayerName} =~/^perl\-runtime$/ ? $_ : () } @layers;
+    }
+
+    if ( $options{raw} ) {
+      print to_json({ Layers => \@layers }, { pretty => 1});
+    }
+    elsif ( $options{table} ) {
+      my $t = new Text::ASCIITable({headingText => 'Lambda Layers', allowANSI => 1});
+      $t->setCols('Name', 'Version', 'Created','ARN', $is_runtime ? ('Perl', 'CPRL', 'Alias') : 'Description');
+      
+      foreach my $layer (@layers) {
+        my @data;
+        if ( $options{layer} ) {
+          my $description = get_layer_description(layer_name => $options{layer}, version => $layer->{Version});
+          push @data, $options{layer}, @{$layer}{qw/Version CreatedDate LayerVersionArn/}, $description;
+        }
+        else {
+          my $latest_matching_version = $layer->{LatestMatchingVersion};
+          my $description = get_layer_description(layer_name => $layer->{LayerName}, version => $latest_matching_version->{Version});
+          
+          # description for a runtime should be a JSON string, but if not, show dashes and description as alias
+          if ( $is_runtime ) {
+            my $info = eval {
+              from_json($description);
+            };
+            
+            my ($perl, $cprl, $alias) = $info ? @{$info}{qw/perl CPRL alias/} : ('-', '-', $description);
+            push @data, $layer->{LayerName}, @{$latest_matching_version}{qw/Version CreatedDate LayerVersionArn/}, $perl,$cprl,$alias;
+          }
+          else {
+            push @data, $layer->{LayerName}, @{$latest_matching_version}{qw/Version CreatedDate LayerVersionArn/}, $description;
+          }
+        }
+        
+        $t->addRow(@data);
+      }
+      print $t;
+    }
+    else {
+      if ( $options{layer} ) { 
+        print join("\n", map { sprintf("%s:%s", $options{layer}, $_->{Version}) }  @layers), "\n";
+     }
+      else {
+        print join("\n", map { sprintf("%s:%s", $_->{LayerName}, $_->{LatestMatchingVersion}->{Version}) }  @layers), "\n";
+      }
+    }
+  }
+  else {
+    fatal_error("could not list layers using $AWS_CLI");
+  }
+  
+}
+
+1;

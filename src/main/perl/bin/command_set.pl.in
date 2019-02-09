@@ -1,0 +1,34 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+use Data::Dumper;
+
+sub command_set {
+  my %args = @_;
+  my %options = %{$args{options}};
+  my @parms = @{$options{parms}};
+  my ($handler, $module, $plambda) = @args{qw/handler module plambda/};
+
+  log_debug(Dumper \@parms);
+  
+  fatal_error("not enough parameters - try 'plamba set help'")
+    unless @parms == 2;
+
+  $plambda->get_lambda_config->update_config(@parms);
+  
+  unless ( $options{dryrun} ) {
+    eval {
+      $plambda->get_lambda_config->dump_config;
+    };
+    
+    fatal_error($@)
+      if $@;
+  }
+  else {
+    print Dump($plambda->get_lambda_config->as_obj);
+  }
+}
+
+1;

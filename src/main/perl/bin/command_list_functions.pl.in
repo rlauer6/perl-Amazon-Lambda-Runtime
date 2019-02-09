@@ -1,0 +1,82 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+sub command_list_functions {
+  my %args = @_;
+  my %options = %{$args{options}};
+
+  my $output = list_functions();
+  my @short_desc = qw/FunctionName Handler Runtime Version LayersParsed LastModified/;
+  my @long_desc = qw/FunctionName Handler MemorySize Timeout RevisionId Role VPCEnabled EnvironmentVariables/;
+  
+  my %headings = (
+                  FunctionName => 'Name',
+                  LayersParsed => 'Layers',
+                  VPCEnabled => 'VPC',
+                  EnvironmentVariables => 'Environment',
+                  RevisonId => 'Revision ID',
+                  MemorySize => 'Memory'
+                 );
+  
+  my @column_headings = @short_desc;
+  my @columns = @short_desc;
+  
+  if ( $options{long} ) {
+    @columns = @long_desc;
+  }
+  
+  @column_headings = map {$headings{$_} ? $headings{$_} : $_ } @columns;
+  
+  if ( $output ) {
+    if ( $options{table} ) {
+      my $t = new Text::ASCIITable({headingText => 'Lambda Functions', allowANSI => 1});
+      
+      $t->setCols(@column_headings);
+      $t->setColWidth('Environment', 20)
+        if $options{long};
+      
+      foreach my $function (@{$output->{Functions}}) {
+        my @data;
+        my @layers;
+        
+        if ( $function->{Layers} ) {
+          my @layers_arns;
+          foreach (@{$function->{Layers}}) {
+            my $layer = $_->{Arn};
+            push @layers, "$1"
+              if $layer =~/layer:(.*)$/;
+          }
+        }
+
+        $function->{LayersParsed} = join("\n", @layers) || "";
+        $function->{VPCEnabled} = defined $function->{VpcConfig} ? 'yes' : 'no';
+        $function->{EnvironmentVariables} = "none";
+        my $role = $function->{Role};
+        $role =~s/^.*role\/(.*)$/$1/;
+        $function->{Role} = $role;
+        if ( $function->{Environment} ) {
+          my $env;
+          foreach ( keys %{$function->{Environment}->{Variables}} ) {
+            $env .= "$_=" . $function->{Environment}->{Variables}->{$_} . "\n";
+          }
+          
+          $function->{EnvironmentVariables} = $env;
+        }
+
+        push @data, @{$function}{@columns};
+        $t->addRow(@data);
+      }
+      print $t;
+    }
+    elsif ( $options{raw} ) {
+      print to_json($output, { pretty => 1 });
+    }
+    else {
+      print join("\n", map { sprintf("%s:%s", @{$_}{qw/FunctionName RevisionId/}) }  @{$output->{Functions}}), "\n";
+    }
+  }
+}
+
+1;

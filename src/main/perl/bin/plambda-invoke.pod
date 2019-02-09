@@ -1,0 +1,98 @@
+=pod
+
+=head1 NAME
+
+invoke
+
+=head1 SYNOPSIS
+
+ plambda invoke payload '{"text" : "Hello World!"}' outfile lambda.out
+
+=head1 DESCRIPTION
+
+Invokes the Lambda.
+
+=head1 PARAMETERS
+
+=over 5
+
+=item * payload
+
+Typically a JSON string that is sent as to the Lambda as the I<event>
+object.
+
+=item * context
+
+This is the client context object.  You can pass the name of file
+prefixed with F<fileb://> in which case the file is assumed to be a
+base64 encoded blob. The client context value will be encoded for you
+if you pass a string.
+
+I<Do not confuse this with the context object of the Lambda>.
+
+=item * outfile
+
+Same as the --output option but as a parameter.
+
+=item * type
+
+Invocation type. One of C<event> or C<response>, C<dryrun>.
+
+=over 10
+
+=item * event
+
+Invoke the function asynchronously. Send events that fail multiple
+times to the function's dead-letter queue (if config- ured).
+
+=item * response
+
+Invoke the function synchronously.  Keep the connection open until the
+function returns a response or times out.
+
+=item * dryrun
+
+Same as --dryrun option.
+
+=back
+
+=item * log-type
+
+=over 10
+
+=item * none
+
+=item * tail
+
+=back
+
+=back
+
+=head1 OPTIONS
+
+=over 5
+
+=item * --outfile
+
+Specfies the name of the file to contain the output of the Lambda.
+
+=item * --version
+
+Version of the Lambda to invoke.  Invokes the $LATEST version if no
+C<--version> option or C<version> command parameter is provided.
+
+=item * --dryrun
+
+Validate parameter values and verify that the user or role has
+permission to invoke the function.
+
+=back
+
+=head1 NOTES
+
+  awslogs get /aws/lambda/MyLambda -s 25m --no-color -G | perl -npe 's/\r/\n/g;'  | less
+
+=head1 SEE ALSO
+
+=cut
+

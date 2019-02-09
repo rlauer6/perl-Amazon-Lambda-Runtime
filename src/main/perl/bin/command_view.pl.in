@@ -1,0 +1,26 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+sub command_view {
+  my %args = @_;
+
+  my %options = %{$args{options}};
+  my @parms = @{$options{parms}};
+
+  if ( $parms[0] eq 'lambda' ) {
+    my ($handler, $module) = @args{qw/handler module/};
+    
+    my ($sha256, $file) = split /\s+/, fetch_function(function => $module);
+  
+    my $result = run_shell_command(command => ['unzip', '-p', $file, "local/lib/perl5/$module.pm"], handle_errors => 1);
+    
+    print $result->{out}
+      if $result->{out};
+  
+    unlink $file;
+  }
+}
+
+1;

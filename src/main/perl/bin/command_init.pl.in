@@ -1,0 +1,193 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+sub create_buildspec_template {
+  my %args = @_;
+
+  my %options = %{$args{options}};
+  my @parms = @{$options{parms}};
+  my $plambda = $args{plambda};
+  
+  my $account = $options{account};
+
+  unless ($account) {
+    $account = aws_get_account();
+
+    if ( $account ) {
+      $account = from_json($account);
+      $account = $account->{Account};
+    }
+  }
+
+  my $region = $options{region} || aws_get_region();
+  chomp $region;
+
+  warning_message("could not determine account number")
+    unless $account;
+      
+  warning_message("could not determine region")
+    unless $region;
+ 
+  my $handler = $options{handler} || 'Lambda.handler';
+  my ($module) = split  /\./, $handler;
+
+  unless ( -e "$module.pm" ) {
+    open (my $fh, '>', "$module.pm") or die "could not create handler $module.pm\n";
+    my $stub;
+    
+    if ( $plambda->stub_file && -s $plambda->stub_file ) {
+      $stub = read_file($plambda->stub_file);
+    }
+    else {
+      $stub = <<eom;
+package $module;
+
+use strict;
+use warnings;
+
+use parent qw/Amazon::Lambda::Runtime/;
+
+sub handler \{
+  my \$self = shift;
+
+  my (\$event, \$context) = \@_;
+
+  return "Hello World!";
+\}
+
+1;
+eom
+    }
+    
+    print $fh $stub;
+    
+    close $fh;
+  }
+  
+  my $role = $options{role} || lc($module) . '-role';
+
+  my $runtime_buildspec = $plambda->get_runtime_config;
+  # if I have a runtime_layer_arn, I better have a perl version
+  # defined in my runtime_buildspec.yml!
+  
+  # if i have a defined version of perl in the runtime_buildspec, then
+  # I must have built the runtime?
+  my $perl_version = $runtime_buildspec->get_perl ? $runtime_buildspec->get_perl->{version} || "" : "";
+ 
+  # current version of perl running this script and presumably being
+  # used for development
+  my $current_perl_version = sprintf("%vd", $^V);
+  
+  my $runtime_layer;
+  my $perl_layer = get_latest_perl_layer();
+
+  # if the runtime_buildspec.yml specifies a version, there better be a Perl layer with that version!
+  if ( $perl_version ) {
+    fatal_error("your runtime_buildspec.yml specifies a version of perl that is unavailable!")
+      unless grep { /$perl_version/ } get_available_perl_versions();
+
+    my $layer_name = "perl-$perl_version";
+    $layer_name =~s/\./_/g;
+    my $layers = list_layer_versions(layer_name => $layer_name);
+    my ($layer_version) = sort { $b <=> $a } map { $_->{Version } } @{$layers->{LayerVersions}};
+    
+    $perl_layer = {
+                   layer => $layer_name,
+                   layer_version => $layer_version,
+                   version => $perl_version
+                  };
+    
+    # if I have a runtime_buildspec with a perl version specified, there has to be a runtime_layer_arn!
+    $runtime_layer = get_runtime_layer_arn(plambda => $plambda);
+  }
+
+  my $layers = undef;
+    
+  if ( $perl_layer && $runtime_layer ) {
+    unless ( $current_perl_version eq $perl_layer->{version} ) {
+      print "WARNING: your Perl layer is version " . $perl_layer->{version} . " but your working perl version is " . $current_perl_version . "!\n"
+    }
+    else {
+      $layers = {};
+      $layers->{$perl_layer->{layer}} = { version => $perl_layer->{layer_version} };
+      $layers->{$runtime_layer->{layer}} = { version => $runtime_layer->{layer_version} };
+    }
+  }
+  elsif ( $perl_layer ) {
+    # I have a Perl layer availalble, so check to see if the version
+    # is compatible with my working perl and if so, let's use this
+    # layer
+    if ( $current_perl_version eq $perl_layer->{version} ) {
+      $layers = {};
+      $layers->{$perl_layer->{layer}} = { version => $perl_layer->{layer_version} };
+      # the runtime has not been built yet or it is not been downloaded?
+      my $runtime_layer = get_latest_runtime_layer();
+      
+      if ( $runtime_layer ) {
+        my $runtime = $runtime_layer->{layer} . ':' . $runtime_layer->{layer_version};
+        my $runtime_perl = $runtime_layer->{description} && $runtime_layer->{description}->{perl};
+        
+        if ( $runtime_perl ) {
+          if ( $runtime_perl eq $current_perl_version ) {
+            warning_message("both a runtime ($runtime) and Perl layer are available that use your working version of perl ($current_perl_version). Consider using the available layers.");
+            $layers->{'perl-runtime'} = { version => $runtime_layer->{layer_version} };
+          }
+        }
+        else {
+          warning_message("a runtime ($runtime) is available but I can't tell if it uses version " . $perl_layer->{version} . " of Perl. Consider using the available runtime.");
+        }
+      }
+    }
+  }
+  
+  my $outfile = $options{outfile};
+  
+  my $buildspec = {
+                   version =>  '@PACKAGE_VERSION@',
+                   aws => {
+                           account => $account,
+                           region => $region,
+                           role => $role,
+                          },
+                   layers => $layers,
+                   handler => $handler,
+                   'vpc-config' => {
+                                  'subnet-ids' => undef,
+                                  'securitygroup_ids' => undef
+                                 },
+                   environment => undef,
+                   timeout => 3,
+                   'memory-size' => 128,
+                   'extra-libs' => undef
+                  };
+  
+  if ( $outfile ) {
+    if ( -e $outfile ) {
+      warning_message("'$outfile' exists. Saving '$outfile' to '$outfile~'");
+      
+      rename $outfile, "$outfile~";
+      
+      fatal_error("could not create $outfile~")
+        unless -e "$outfile~";
+    }
+  
+    DumpFile($outfile);
+  }
+  else {
+    print Dump($buildspec);
+  }
+}
+
+# - creates a buildspec.yml template
+sub command_init {
+  my %args = @_;
+  my %options = %{$args{options}};
+  my @parms = @{$options{parms}};
+  my ($handler, $module, $plambda) = @args{qw/handler module plambda/};
+
+  create_buildspec_template(options => \%options, plambda => $plambda);
+}
+
+1;

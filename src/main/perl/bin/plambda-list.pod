@@ -1,0 +1,65 @@
+=pod
+
+=head1 NAME
+
+list
+
+=head1 SYNOPSIS
+
+ plambda list layers
+ plambda list functions
+
+=head1 DESCRIPTION
+
+
+List various Lambda artifacts.  C<item> should be one of:
+
+=over 5
+
+=item * runtime
+
+List the latest version of the custom Perl runtime layer (CPRL).
+
+=item * layers
+
+Lists all the I<latest versions> of all layers, not just the custom
+Perl runtime layer. I<Note to list all B<versions> of a layer use the
+C<--layer> option.>
+
+=item * functions | lambdas
+
+List the latest version of all Lambda functions.
+
+=back
+
+=head1 OPTIONS
+
+=over 5
+
+=item --long
+
+Use the C<--long> option with the C<--table> option to get more
+details on the Lambda function.
+
+=item --layer
+
+Use this option to list all versions of a the layer when using the
+C<list layers> command.
+
+ plambda --layer perl-runtime list layers
+
+You can also use the parameterized syntax to pass the layer name to the command,
+
+ plambda list layers perl-runtime
+
+=item --raw, -r
+
+Return the raw JSON from the AWS CLI command.
+
+=item --table, -t
+
+Output as a formatted table.
+
+=back
+
+=cut

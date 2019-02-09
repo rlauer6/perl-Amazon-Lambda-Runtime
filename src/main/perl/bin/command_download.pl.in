@@ -1,0 +1,69 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+use File::Touch;
+
+sub command_download {
+  my %args = @_;
+
+  my %options = %{$args{options}};
+  my @parms = @{$options{parms}};
+  
+  my ($handler, $module, $plambda) = @args{qw/handler module plambda/};
+  my $sub_command = $parms[0] || "";
+
+  for ("$sub_command") {
+    /^runtime$/ && do {
+
+      my $output = list_layer_versions(layer_name => 'perl-runtime');
+      my @available_versions = get_available_runtimes();
+      
+      fatal_error("no runtimes available to downlod")
+        unless @available_versions;
+          
+      my $version = $options{version};
+      
+      if ( $version ) {
+        fatal_error("no such perl-runtime version $version")
+          unless grep { /^$version$/ } @available_versions;
+      }
+      else {
+        $version = shift @available_versions;
+      }
+
+      unless ( $plambda->scandeps->{enabled} ) {
+        my %scandeps_env = $plambda->scandeps_env;
+        
+        foreach (keys %scandeps_env ) {
+          $ENV{$_} = $scandeps_env{$_};
+        }
+      }
+      else {
+        $ENV{NO_SCANDEPS} = 1;
+      }
+
+      run_shell_command(command => ['plambda-utils', 'fetch-layer', $version], handle_errors => 1);
+
+      if  ( $plambda->update_version ) {
+        set_runtime_version(%args, version => $version);
+      }
+      
+      touch $plambda->get_plambda_home . '/buildspec.yml';
+      touch $plambda->get_plambda_home . '/config.log';
+      
+      print "perl-runtime:$version\n";
+      
+      last;
+    };
+    
+    /^function$/ && do {
+      fatal_error("not implemented at this time");
+      last;
+    };
+    
+  }
+}
+
+1;

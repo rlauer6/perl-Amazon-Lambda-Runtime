@@ -1,0 +1,33 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+
+sub command_delete_function {
+  my %args = @_;
+  my %options = %{$args{options}};
+  my $module  = $args{module};
+  
+  my $output = list_functions();
+  my $functions = $output->{Functions};
+  my @function_names = map { $_->{FunctionName} } @$functions;
+
+  my $version = $options{version};
+  $version = "--qualifier $version"
+    if $version;
+  
+  if ( grep { /$module/ } @function_names ) {
+    print sprintf("%s...deleting: %s:%s\n",
+                  $options{dryrun} ? "(dryrun)" : "",
+                  $module,
+                  $options{version} ? $options{version} : '$Latest'
+                 );
+  
+    delete_function(module => $module, %options);
+  }
+  else {
+    fatal_error("no function named $module");
+  }
+}
+1;

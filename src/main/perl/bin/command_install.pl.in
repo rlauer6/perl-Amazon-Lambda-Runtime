@@ -1,0 +1,268 @@
+#!/bin/env perl
+
+use Data::Dumper;
+use File::Touch;
+use Cwd;
+
+sub command_install {
+  my %args = @_;
+  my %options = %{$args{options}};
+  my @parms = @{$options{parms}};
+  
+  my ($handler, $module, $plambda) = @args{qw/handler module plambda/};
+
+  log_debug("start: " . Dumper \%options);
+  
+  my $sub_command = $options{install} || 'install';
+
+  my $target = $parms[0] || 'lambda';
+  
+  unless ( is_config_current() ) {
+    
+    if ( $sub_command eq 'deploy' ) {
+      warning_message("'buildspec.yml' changes detected. Running config.");
+      configure(%args);
+    }
+    else {
+      # see if we need to run config first
+      fatal_error("'buildspec.yml' changes detected. 'plambda config' first!");
+    }
+  }
+  
+  my $runtime_layer_arn;
+  my $revision_id;
+  my $md5;
+  my $lambda_runtime_version; # version of the CPRL currently specified in buildspec
+
+  my $buildspec_layers = $plambda->get_lambda_config->get_layers || {};
+  my $buildspec_runtime_layer_version = $buildspec_layers->{'perl-runtime'} && $buildspec_layers->{'perl-runtime'}->{version};
+  my $lambda_dir = $plambda->builddir;
+  
+  for ("$target") {
+    /^runtime$/ && do {
+      my $layers = list_layers();
+
+      foreach my $layer (@{$layers->{Layers}}) {
+        if ( $layer->{LayerName} eq 'perl-runtime' ) {
+          $runtime_layer_arn = $layer->{LatestMatchingVersion}->{LayerVersionArn};
+        }
+      }
+      
+      $md5 = file_md5("$lambda_dir/perl-runtime.zip")
+        if -e "$lambda_dir/perl-runtime.zip";
+      
+      if ( $sub_command eq 'install' ) {
+        if ( $options{force} ) {
+          unlink "$lambda_dir/runtime_layer_arn"
+        }
+
+        $target = 'runtime-layer';
+      }
+      elsif ( $sub_command eq 'build' ) {
+        unlink "$lambda_dir/perl-runtime.zip"
+          if $options{force};
+
+        rename "perl-runtime.zip", "perl-runtime.zip~"
+          if -e "perl-runtime.zip" && ! $options{dryrun};
+          
+        $target = 'runtime-pkg';
+      }
+      elsif ( $sub_command eq 'deploy' ) {
+        if ( $options{force} ) {
+          unlink "$lambda_dir/runtime_layer_arn";
+          unlink "$lambda_dir/perl-runtime.zip";
+        }
+                
+        $target = 'runtime-layer';
+      }
+      
+      last;
+    };
+    
+    /^lambda$/ && do {
+      my $function_details = get_function_details(function => $module, plambda => $plambda);
+      
+      log_debug(Dumper [ $function_details ]);
+  
+      $revision_id = $function_details->{RevisionId};
+
+      
+      $md5 = file_md5("$lambda_dir/$module.zip")
+        if -e "$lambda_dir/$module.zip";
+      
+      if ( $sub_command eq 'install' ) {
+        unlink "$lambda_dir/$module"
+          if $options{force};
+        $target = 'lambda';
+      }
+      elsif ( $sub_command eq 'build' ) {
+        rename "$module.zip", "$module.zip~"
+          if -e "$module.zip" && ! $options{dryrun};
+        
+        touch "$module.pm"
+          if $options{force};
+        
+        $target = 'lambda-pkg';
+      }
+      elsif ( $sub_command eq 'deploy' ) {
+        if ( $options{force} ) {
+          unlink "$lambda_dir/$module.zip";
+          unlink "$lambda_dir/$module";
+        }
+        
+        $target = 'lambda';
+      }
+
+      last;
+    };
+    
+    fatal_error("unknown target $target");
+  }
+  
+  my $cwd = getcwd;
+  fatal_error("could not chdir to chdir $lambda_dir")
+    unless chdir "$lambda_dir";
+  
+  my $no_scandeps = $plambda->scandeps->{enabled} ? "" : "NO_SCANDEPS=1";
+
+  log_debug("no_scandeps: $no_scandeps " . Dumper \%options);
+  
+  # check to see if we have configured project yet...
+  my $result = make('check-config');
+    
+  fatal_error($result->{out}) 
+    if $result->{retcode};
+
+  # see if we need to build runtime
+  if ( $options{dryrun} ) {
+    if ( ! is_runtime_current(plambda => $plambda) ) {
+      print "perl-runtime.zip will be built and installed\n";
+    }
+
+    if ( ! is_lambda_current(plambda => $plambda) ) {
+      print "$module.zip will be built and installed\n";
+    }
+    
+    return;
+  }
+
+  my @args;
+  
+  push @args, $target
+    if $target;
+
+  if ( $no_scandeps ) {
+    push @args, $no_scandeps;
+  }
+  else {
+    my %env = $plambda->scandeps_env;
+    push @args, map { sprintf("%s=%s", $_, $env{$_}) } keys %env;
+  }
+  
+  if ( my $cpan = $plambda->cpan ) {
+    my $CPAN_MIRROR;
+
+    if ( $cpan->{'mirror-only'} ) {
+      $CPAN_MIRROR = '--mirror-only --mirror ' . $cpan->{'mirror-only'};
+    }
+    
+    if ( $cpan->{mirror} || $cpan->{'mirror-only'} ) {
+      $CPAN_MIRROR .= ' --mirror ' . $cpan->{mirror} || 'http://www.cpan.org';
+    }
+    
+    push @args, "CPAN_MIRROR=$CPAN_MIRROR"
+      if $CPAN_MIRROR;
+  }
+
+  log_debug("command make: ", join(" ", @args));
+  
+  $result = make(@args);
+
+  if ( $result->{retcode} ) {
+    my $err = $result->{err};
+    $err =~s/^make.*$//mg;
+    $err =~s/\n\n/\n/sg;
+    die $err . "check plambda.log!\n";
+  }
+
+  print $result->{out}
+    if $options{verbose} || $options{dryrun};
+  
+  chdir $cwd;
+    
+  unless ( $options{dryrun} ) {
+    my $new_function_details = get_function_details(function => $module, plambda => $plambda);
+    my $runtime_layer = get_runtime_layer_arn(plambda => $plambda);
+    
+    my $new_runtime_layer_arn = $runtime_layer ? $runtime_layer->{arn} : '';
+    my $new_runtime_layer = $runtime_layer ? $runtime_layer->{layer_version} : '';
+    
+    for ("$target") {
+      
+      /^lambda$/ && do  {
+        if ( $sub_command eq 'build' ) {
+          if ( -e "$lambda_dir/$module.zip" ) {
+            if ($md5 && $md5 eq file_md5("$lambda_dir/$module.zip") ) {
+              print "$module.zip up to date\n"
+                if $options{verbose};
+            }
+            else {
+              print "$module.zip\n";
+              # if we build a new Lambda and update the runtime layer, we'll need to:
+              # - reinstall the lambda
+              check_buildspec_runtime_version(version => $runtime_layer->{layer_version}, %args );
+              prevent_rebuild(function => $module, plambda => $plambda);
+            }
+          }
+          else {
+            fatal_error("failed to build $module.zip");
+          }
+        }
+        elsif ( $sub_command =~/^(install|deploy)$/ ) {
+          if ( $revision_id && $revision_id eq $new_function_details->{RevisionId} ) {
+            print "$module.zip is up to date\n";
+          }
+          else {
+            print $new_function_details->{RevisionId}, "\n";
+            check_buildspec_runtime_version(version => $runtime_layer->{layer_version}, %args);
+            prevent_rebuild(function => $module, plambda => $plambda);
+          }
+        }
+        last;
+      };
+      
+      /^runtime$/ && do {
+        if ( $sub_command eq 'build' ) {
+          if ( -e "$lambda_dir/perl-runtime.zip" ) {
+            if ( $md5 && $md5 eq file_md5("$lambda_dir/perl-runtime.zip") ) {
+              print "perl-runtime.zip is up to date\n";
+            }
+            else {
+            print "perl-runtime.zip\n";
+          }
+          }
+          else {
+            fatal_error("perl-runtime.zip failed to build");
+          }
+        }
+        elsif ( $sub_command =~/(install|deploy)/ ) {
+          if ( $runtime_layer_arn && $runtime_layer_arn eq $new_runtime_layer_arn ) {
+            print "perl-runtime.zip is up to date\n";
+          }
+          else {
+            print "$new_runtime_layer\n";
+            
+            if ( $options{'update-version'} ) {
+              warning_message("updating runtime version, re-install your Lambda package");
+              set_runtime_version(%args, version => $new_runtime_layer);
+              configure(%args);
+            }
+          }
+        }
+        last;
+      };
+    } 
+  }
+}
+
+1;

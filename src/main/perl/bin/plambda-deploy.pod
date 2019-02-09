@@ -1,0 +1,65 @@
+=pod
+
+=head1 NAME
+
+deploy
+
+=head1 SYNOPSIS
+
+ plambda --force deploy runtime
+
+=head1 DESCRIPTION
+
+Builds I<AND> installs a custom Perl runtime layer or Lambda package.
+Typically, if you want to re-deploy a runtime or Lambda you can force
+a build and then run the C<install> command. The C<deploy> command is
+a one stop shop.
+
+ plambda --force build runtime
+ plambda install runtime
+
+or
+
+ plambda --force deploy runtime
+
+The C<deploy> command can also be used to automatically configure the
+project if a change is detected in your buildspec file. So, instead of doing:
+
+ plambda config && plambda install lambda
+
+...do
+
+ plambda deploy lambda
+
+You'll need to re-build and re-install your Lambda package whenever
+you build a new runtime, assuming if you want the Lambda to use the
+new runtime. You can do this by running the C<install> command
+after deploying a new runtime.
+
+ plambda deploy runtime
+ plambda install lambda
+
+I<plambda> will automatically recognize that there is a new runtime
+version and re-build the Lambda when you run the C<install> command.
+
+=head1 OPTIONS
+
+=over 5
+
+=item * --dryrun
+
+Reports what would be done, but does not perform any action.
+
+=item * --force
+
+Forces a build and install.
+
+=back
+
+=head1 SEE ALSO
+
+ plambda build
+ plambda install
+
+=cut
+

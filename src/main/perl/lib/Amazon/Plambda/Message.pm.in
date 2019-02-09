@@ -1,0 +1,59 @@
+package Amazon::Plambda::Message;
+
+use strict;
+use warnings;
+
+use Exporter;
+use Term::ANSIColor;
+
+use vars qw/@ISA @EXPORT_OK %EXPORT_TAGS/;
+
+@ISA = qw/Exporter/;
+
+@EXPORT_OK = qw/fatal_error non_fatal_error warning_message green red yellow orange blue/;
+
+%EXPORT_TAGS = ( all => \@EXPORT_OK );
+
+sub colored_message {
+  my %args = @_;
+  
+  my $message = $args{message};
+  my $color = $args{color} || 'bright_green';
+  my $prefix = $args{prefix} || '';
+  my $newline = $args{newline} // 1;
+  
+  # avoid 2 new-lines if caller already provided...
+  if ( $newline ) {
+    chomp $message;
+    $args{newline} = "\n";
+  }
+  else {
+    $args{newline} = "";
+  }
+  
+  $message = colored([$args{color}], $args{prefix}) . $message;
+
+  return $message . $args{newline};
+}
+
+sub fatal_error {
+  die colored_message(prefix => "ERROR: ", color => 'bright_red', message => @_);
+}
+
+sub non_fatal_error {
+  warn colored_message(prefix => "ERROR: ", color => 'bright_red', message => @_);
+}
+
+sub warning_message {
+  warn colored_message(prefix => "WARNING: ", color => 'bright_yellow', message => @_);
+}
+
+sub _color { return colored([shift], @_) }
+
+sub red    { _color('bright_red',    @_) };
+sub green  { _color('bright_green',  @_) };
+sub yellow { _color('bright_yellow', @_) };
+sub orange { _color('yellow', @_) };
+sub blue   { _color('bright_blue',   @_) };
+
+1;

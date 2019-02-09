@@ -1,0 +1,193 @@
+package Amazon::Plambda;
+
+use strict;
+use warnings;
+
+use parent qw/Class::Accessor/;
+
+use Amazon::Plambda::Runtime;
+use Amazon::Plambda::Buildspec;
+use Amazon::Plambda::Global;
+use Amazon::Plambda::Message qw/fatal_error warning_message non_fatal_error/;
+
+__PACKAGE__->follow_best_practice;
+__PACKAGE__->mk_accessors(qw/options builddir home plambda_home runtime_config lambda_config plambda_config installdir/);
+
+use Scalar::Util qw/reftype/;
+use YAML::Syck;
+
+my $installdir = '@datadir@';
+
+sub new {
+  my $class = shift;
+  my $self = $class->SUPER::new(@_);
+
+  $self->set_installdir($installdir);
+
+  $self->set_plambda_home($ENV{PLAMBDA_HOME})
+    unless $self->get_plambda_home;
+
+  $self->set_home($ENV{HOME} || $self->get_plambda_home);
+  
+  $self->set_runtime_config(Amazon::Plambda::Runtime->new({path => $self->get_plambda_home, config => 'runtime-buildspec'}));
+  
+  $self->set_lambda_config(Amazon::Plambda::Buildspec->new({path => $self->get_plambda_home, config => 'buildspec'}));
+
+  $self->set_plambda_config(Amazon::Plambda::Global->new({path => $self->get_home . '/.plambda', config => 'plambda'}));
+  
+  $self->set_builddir('src/main/perl/lambda');
+
+  $self;
+}
+
+sub builddir {
+  my $self = shift;
+
+  return sprintf("%s/%s", $self->get_plambda_home, $self->get_builddir);
+}
+
+sub cpan {
+  my $self = shift;
+  
+  my $lambda_config = $self->get_lambda_config;
+  my $plambda_config = $self->get_plambda_config;
+  
+  my $cpan;
+  
+  if ( $lambda_config->get_cpan &&  reftype($lambda_config->get_cpan) eq 'HASH' ) {
+    $cpan = $lambda_config->get_cpan;
+  }
+  elsif ( $plambda_config->get_cpan && reftype($plambda_config->get_cpan) eq 'HASH' ) {
+    $cpan = $plambda_config->get_cpan;
+  }
+  else {
+    $cpan = {mirror => 'https://www.cpan.org'};
+  }
+
+  $cpan;
+}
+
+
+# +--------------+
+# | color option |
+# +--------------+
+
+sub color {
+  my $self = shift;
+
+  my $color;
+  
+  if ( exists $ENV{ANSI_COLOR_DISABLED} ) {
+    $color = 0;
+  }
+  elsif ( defined $self->get_options->{color} && $self->get_options->{color} eq '0' ) {
+    $color = 0;
+  }
+  elsif ( defined $self->get_plambda_config->get_color && $self->get_plambda_config->get_color eq '0' ) {
+    $color = 0;
+  }
+  else {
+    $color = 1;
+  }
+  
+  $color;
+}
+
+# +------------------+
+# | stub-file option |
+# +------------------+
+
+sub stub_file {
+  my $self = shift;
+  my $stub_file;
+  
+  $stub_file = $self->get_options->{'stub-file'} || $self->get_plambda_config->get('stub-file');
+  
+  if ( $stub_file ) {
+    $self->warning_message("no file named " . $stub_file . " found. check your 'stub-file' setting in 'plambda.yml'")
+      unless -e $stub_file;
+  }
+   
+  $stub_file;
+}
+
+sub update_version {
+  my $self = shift;
+
+  my $update_version;
+  
+  if ( exists $self->get_options->{'update-version'} ) {
+    $update_version = $self->get_options->{'update-version'};
+  }
+  elsif (exists $self->get_plambda_config->{'update-version'} ) {
+    $update_version = $self->get_plambda_config->{'update-version'};
+  }
+  else {
+    $update_version = 1;
+  }
+
+  $update_version;
+}
+
+# ENV, project (or runtime), global setting
+sub scandeps {
+  my $self = shift;
+  my $runtime = shift;
+  
+  my $config = ($runtime && $runtime eq 'runtime') ? $self->get_runtime_config : $self->get_lambda_config;
+  my $plambda_config = $self->get_plambda_config;
+  
+  my $scandeps = {
+                  enabled => 1
+                 };
+                  
+  if ( exists $self->get_options->{scandeps} && $self->get_options->{scandeps} eq '0' ) {
+    $scandeps->{enabled} = 0;
+  }
+  elsif ( exists $ENV{NO_SCANDEPS} ) {
+    $scandeps->{enabled} = 0;
+  }
+  elsif ($config->get_scandeps && reftype($config->get_scandeps) eq 'HASH') {
+    $scandeps->{enabled} = $config->get_scandeps->{enabled};
+    
+    if ( $config->get_scandeps->{path} ) {
+      $scandeps->{path} = $config->get_scandeps->{path};
+      $scandeps->{args} = $config->get_scandeps->{args};
+    }
+    else {
+      $scandeps->{path} = $plambda_config->get_scandeps->{path};
+      $scandeps->{args} = $plambda_config->get_scandeps->{args};
+    }
+  }
+  else {
+    $scandeps = $plambda_config->get_programs->{scandeps};
+  }
+  
+  $scandeps;
+}
+
+sub load_config {
+  my $self = shift;
+  my $config = shift;
+  my $path = shift || $self->get_home;
+  
+  $path = sprintf("%s/%s.yml", $self->get_home, $config);
+  
+  (- e $path && -s $path ) ?  LoadFile($path) : {};
+}
+
+sub scandeps_env {
+  my $self = shift;
+  
+  my %scandeps_env;
+  
+  my $scandeps = $self->scandeps('runtime');
+  $scandeps_env{SCANDEPS} = $scandeps->{path};
+  
+  my $scandeps_args = $scandeps->{args} && reftype($scandeps->{args}) eq 'ARRAY' ? join(" ", @{$scandeps->{args}}) : "";
+  $scandeps_env{SCANDEPS_ARGS} = $scandeps_args;
+  
+  return %scandeps_env;
+}
+
+1;

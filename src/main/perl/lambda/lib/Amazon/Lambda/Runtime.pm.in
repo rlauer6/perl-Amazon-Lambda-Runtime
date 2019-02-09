@@ -1,0 +1,499 @@
+package Amazon::Lambda::Runtime::Logger;
+
+use strict;
+use warnings;
+
+use parent qw/Class::Accessor Exporter/;
+
+use Scalar::Util qw/reftype/;
+use Date::Format;
+
+__PACKAGE__->follow_best_practice;
+__PACKAGE__->mk_accessors(qw/log_level/);
+
+our %LOG_LEVELS = (
+                   debug => 1,
+                   info  => 2,
+                   warn  => 3,
+                   error => 4,
+                   fatal => 5
+                  );
+
+sub debug {  my $self = shift;  $self->log('debug', @_); }
+sub info  {  my $self = shift;  $self->log('info', @_); }
+sub warn  {  my $self = shift;  $self->log('warn', @_); }
+sub error {  my $self = shift;  $self->log('error', @_); }
+sub fatal {  my $self = shift;  $self->log('fatal', @_); }
+
+sub log {
+  my $self = shift;
+  my $level = shift;
+  
+  my $cur_level = $LOG_LEVELS{$self->get_log_level() || 'info'} || 2;
+  unshift @_, $level;
+  
+  $level = $LOG_LEVELS{$level} || 2;
+
+  if ( $level >= $cur_level) {
+    _logger(@_);
+  }
+}
+
+sub _logger {
+  my @tm = localtime(time);
+  my $level = shift;
+  my $message = shift;
+    
+  if ( ref($message) && reftype($message) eq 'CODE' ) {
+    $message = $message->();
+  }
+  
+  $message = $message . join('', @_)
+    if @_;
+
+  # CloudWatch logs look better in the console this way...
+  $message =~s/\n/\r/mg;
+  
+  print STDERR sprintf("[%s] %s: %s", strftime("%c", @tm), $level, $message . "\n");
+}
+
+package Amazon::Lambda::Runtime;
+
+use Amazon::Lambda::Context;
+
+use strict;
+use warnings;
+
+use parent qw/Class::Accessor Exporter/;
+
+__PACKAGE__->follow_best_practice;
+__PACKAGE__->mk_accessors(qw/credentials context event handler logger api_version event_headers request_id/);
+
+use Data::Dumper;
+use Date::Format;
+use LWP::UserAgent;
+use JSON;
+use Scalar::Util qw/reftype/;
+
+use vars qw/$VERSION @EXPORT/;
+
+
+use constant {
+              INITIALIZATION_ERROR  => "http://%s/%s/runtime/init/error",
+              INVOCATION_ERROR      => "http://%s/%s/runtime/invocation/%s/error",
+              INVOCATION_NEXT       => "http://%s/%s/runtime/invocation/next",
+              INVOCATION_RESPONSE   => "http://%s/%s/runtime/invocation/%s/response"
+             };
+
+$VERSION = '@PACKAGE_VERSION@'; $VERSION=~s/\-.*$//;
+
+@EXPORT = qw/$VERSION/;
+
+=pod
+
+=head1 NAME
+
+C<Amazon::Lambda::Runtime>
+
+=head1 SYNOPSIS
+
+ package Lambda;
+
+ use parent qw/Amazon::Lambda::Runtime/;
+
+ sub handler {
+   my $self = shift;
+   my ($event, $context) = @_;
+
+   return "Hello World!";
+ }
+
+ 1;
+
+=head1 DESCRIPTION
+
+Base class for creating Perl Lambdas in the AWS environment.
+
+=head1 METHODS
+
+=head2 new
+
+ new(options)
+
+Constructor for the class.  Since your class is being
+instantiated by the runtime harness, in practice, you'll never call
+this directly in any of your code.  However, your class may override
+the method in the usual way (being careful to call the base class at
+some point).  This class subclasses C<Class::Accessor>.
+
+C<options> is a hash reference of possible options as described below:
+
+=over 10
+
+=item log_level
+
+Log level. One of:
+
+ fatal
+ error
+ warn
+ info
+ debug
+
+=back
+
+Example:
+
+ package Lambda;
+
+ use parent qw/Amazon::Lambda::Runtime/;
+
+ sub new {
+   my $class = shift;
+   my $self = $class->SUPER::new(@_);
+
+   # your code here ....
+
+   $self;
+ }
+
+ sub handler {
+   my $self = shift;
+   my ($event, $context) = @_;
+
+   return "Hello World!";
+ }
+
+ 1;
+
+=head2 get_logger
+
+Returns a log object suitable for passing log message to.  See L</Logging>.
+
+You can pass a string or a code reference to the log methods
+(C<debug>, C<info>,C<warn>,C<error>,C<fatal>) that will be executed if
+the current logging level is at or above the logging level
+corresponding to the method invoked.
+
+=cut
+
+sub new {
+  my $class = shift;
+  
+  my $self = $class->SUPER::new(shift);
+  
+  $self->set_logger(new Amazon::Lambda::Runtime::Logger({ log_level => $ENV{LOG_LEVEL} || 'info' }));
+  
+  $self->set_api_version('2018-06-01');
+    
+  my $handler = (split /\./,$ENV{'_HANDLER'})[1];
+  
+  die "could not determine handler name: should be 'class.method'"
+    unless $handler;
+
+  $self->set_handler($handler);
+
+  $self->get_logger->info('CPRL: v@PACKAGE_VERSION@, perl: ' . sprintf("%vd", $^V));
+
+  $self->get_logger->debug('handler: ' . $handler);
+
+  # reset context object
+  $self->set_context({});
+  
+  $self;
+}
+
+=pod
+
+=head2 run
+
+ run()
+
+Executes the event loop, looking for events invoking the handler.
+Sends the response or error back to the Lambda service after calling
+the handler.
+
+=cut
+
+sub run {
+  my $self = shift;
+  
+  while (my $event = $self->next_event) {
+    $self->get_logger->debug(sub { 'event: ' . Dumper $event });
+    
+    my $handler = $self->get_handler();
+    
+    if ( $handler && $self->can($handler) ) {
+      
+      # handlers can:
+      #
+      # 1) die
+      # 2) return undef
+      # 3) return a response
+      #
+      # if they return undef, it is assumed they have sent the
+      # response back themselves...
+      
+      my $response = eval {
+        $self->get_logger->debug("calling handler with event: " . Dumper [ $event ]);
+        $self->$handler($event, $self->get_context);
+      };
+      
+      my $err = $@;
+      
+      if ( $err ) {
+        $self->get_logger->error($err);
+        $self->send_invocation_error($err, 'Exception');
+      }
+      elsif ( defined $response ) {
+          $self->get_logger->debug('response: ' . $response);
+          $self->send_invocation_response($response);
+        }
+    }
+   $self->get_logger->debug("getting next event...at " . localtime(time) ); 
+  }
+}
+
+=pod
+
+=head2 next_event
+
+ next_event()
+
+Implements the protocol of custom AWS Lambda Runtimes by retrieving
+the next event.  As an optimization, calls to an an AWS Lambda
+function may land on the on the same or different instance.
+Apparently this protocol might allow for multiple Lambda functions to
+be processed by the same running Lambda environment.  This allows for
+some optimizations in your own code by saving data that might speed up
+or faciliate future invocations.  Keep in mind you should not expect
+to have persistence of your data and should code accordingly.
+
+The method is used internally and should not be called by any of your
+own Lambda code.
+
+The method returns an event object.
+
+=cut
+
+sub next_event {
+  my $self = shift;
+  
+  
+  $self->set_event(undef);
+
+  my $url = sprintf(INVOCATION_NEXT, $ENV{AWS_LAMBDA_RUNTIME_API}, $self->get_api_version );
+
+  $self->get_logger->debug("next_event called at " . localtime(time) );
+  
+  my $result = $self->get_ua->get($url);
+  
+  $self->get_logger->debug(Dumper $result);
+  
+  if ( $result->is_success ) {
+    $self->set_event(from_json $result->content);
+
+    $self->get_logger->info('event: ' . $result->content);
+
+    my $headers = $result->headers;
+    
+    # set context object
+    $self->set_context(new Amazon::Lambda::Context({ headers => $headers}));
+    
+    $self->set_event_headers($headers);
+    $self->get_logger->debug('event headers: '. Dumper $headers);
+
+    # get request id
+    my ($request_id) =  $headers->header('lambda-runtime-aws-request-id');
+    $self->set_request_id($request_id);
+    $self->get_logger->debug('request_id: ' . $self->get_request_id);
+  }
+  else {
+    $self->get_logger->debug('next_event error: ' . Dumper [ $result ]);
+    die "could not read next event successfully";
+  }
+  
+  return $self->get_event;
+}
+
+
+=pod
+
+=head2 handler
+
+ handler(event, context)
+
+Your class should provide its own C<handler()> method and return a
+response. Anything sent to C<STDERR> will be sent to the CloudWatch
+logstream for this Lambda.  A non-zero status from the runtime harness
+will signal a Lambda error, so throwing an exception is sufficient to
+indicate an error condition.  You can however use the
+C<send_invocation_error()> to indicate an error and a message in a
+more graceful way.
+
+=cut
+
+sub handler {
+  my $self = shift;
+  
+  $self->send_invocation_error("no handler defined", "NoHandlerDefinedException");
+  
+  return undef;
+}
+
+=pod
+
+=head2 send_invocation_reponse
+
+ send_invocation_response(response)
+
+Used interally to send the response back to the Lambda service.
+
+=cut
+
+sub send_invocation_response {
+  my $self = shift;
+  my $response = shift;
+    
+  my $url = sprintf(INVOCATION_RESPONSE, $ENV{AWS_LAMBDA_RUNTIME_API}, $self->get_api_version, $self->get_request_id );
+  
+  my $result = $self->get_ua->post($url, [], Content => $response);
+  
+  if ( $result->is_success ) {
+    $self->get_logger->debug('successfully sent response [' . $response . ']');
+  }
+
+  return $result->is_success;
+}
+
+sub send_init_error {
+  my $self = shift;
+  my ($error_message, $error_type) = @_;
+  
+  my $url = sprintf(INITIALIZATION_ERROR, $ENV{AWS_LAMBDA_RUNTIME_API}, $self->get_api_version );
+
+  return $self->_post_error($error_message, $error_type);
+}
+
+=pod
+
+=head2 send_invocation_error
+
+ send_error(error-message, error-type)
+
+Sends an error message and error type to the Lambda service.  This is
+the preferred way of indicating errors to the service.
+
+=cut
+
+sub send_invocation_error {
+  my $self = shift;
+  my ($error_message, $error_type) = @_;
+  
+  my $url = sprintf(INVOCATION_ERROR, $ENV{AWS_LAMBDA_RUNTIME_API}, $self->get_api_version, $self->get_request_id );
+
+  return $self->_post_error($url, $error_message, $error_type);
+}
+
+# Note: At one point, I thought I could use Furl, however I found that
+# Furl's timeout implmentation is not conducive to use in the Lambda
+# runtime protocol loop.  It looks like Furl uses the wall clock
+# instead of execution time to determine its timeout behavior.
+
+sub get_ua {
+  return new LWP::UserAgent(timeout => 10);
+}
+
+sub _post_error {
+  my $self = shift;
+  my ($url, $error_message, $error_type) = @_;
+
+  my $error = { errorMessage => $error_message, errorType => $error_type};
+  
+  my $result = $self->get_ua->post($url, [], to_json($error));
+  
+  if ( $result->is_success ) {
+    $self->get_logger->debug('successfully sent error [' . to_json($error, { pretty => 1}));
+    $self->get_logger->debug(Dumper [ $result ]);
+  }
+
+  return $result->is_success;
+}
+
+=head1 NOTES
+
+=head2 Logging
+
+Any output to C<STDERR> will be captured in the CloudWatch logstream
+for the Lambda.  You can log messages by simply writing to STDERR,
+however you might find however that messages sent in this fashion are
+B<not> as easy to decipher as you might like because of newline
+mangling.  For better log messages use the internal logging system for
+C<Amazon::Lambda::Runtime> which outputs messages in a more CloudWatch
+friendly format.
+
+  $self->get_logger->debug("a log message");
+
+  $self->get_logger->info(sub { Dumper $event });
+
+Use the C<get_logger> method to get an instance of the log
+object. Available log methods are:
+
+=over 5
+
+=item * debug 
+
+=item * info 
+
+=item * error
+
+=item * warn
+
+=item * fatal
+
+=back
+
+By default, logging will be done at the C<info> level.  You can set the
+log leve in your handler or in the environment by setting the
+C<LOG_LEVEL> environment variable in the C<environment> section of
+your F<buildspec.yml> file.
+
+=head2 AWS Reference Implementation
+
+As a reminder, this is the AWS reference implementation for a custom
+runtime (as a bash script):
+
+  #!/bin/sh
+  
+  set -euo pipefail
+  
+  # Initialization - load function handler
+  source $LAMBDA_TASK_ROOT/"$(echo $_HANDLER | cut -d. -f1).sh"
+  
+  while true
+   do
+     HEADERS="$(mktemp)"
+     # Get an event
+     EVENT_DATA=$(curl -sS -LD "$HEADERS" -X GET "http://${AWS_LAMBDA_RUNTIME_API}/2018-06-01/runtime/invocation/next")
+     REQUEST_ID=$(grep -Fi Lambda-Runtime-Aws-Request-Id "$HEADERS" | tr -d '[:space:]' | cut -d: -f2)
+   
+     # Execute the handler function from the script
+     RESPONSE=$($(echo "$_HANDLER" | cut -d. -f2) "$EVENT_DATA")
+   
+     # Send the response
+     curl -X POST "http://${AWS_LAMBDA_RUNTIME_API}/2018-06-01/runtime/invocation/$REQUEST_ID/response"  -d "$RESPONSE"
+   done
+
+=head1 AUTHOR
+
+Rob Lauer - <rlauer6@comcast.net>
+
+=head1 COPYRIGHT
+
+(c) Copyright 2019 Robert C. Lauer. All rights reserved.  This module
+is free software. It may be used, redistributed and/or modified under
+the same terms as Perl itself.
+
+=cut
+
+1;

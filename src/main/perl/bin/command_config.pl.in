@@ -1,0 +1,324 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+use constant {
+    AWS_PROFILE         => '--with-aws-profile',
+    AWS_ACCOUNT         => '--with-aws-account',
+    REGION              => '--with-aws-region',  
+    ROLE                => '--with-role',
+    HANDLER             => '--with-handler',
+    PERL_VERSION        => '--with-perl-layer-version',
+    VPC_CONFIG          => '--with-vpc-config',
+    ENVIRONMENT         => '--with-environment',
+    TIMEOUT             => '--with-timeout',
+    MEMORY_SIZE         => '--with-memory-size',
+    EXTRA_LIBS          => '--with-extra-libs'
+  };
+
+use Data::Dumper;
+
+sub command_config {
+  my %args = @_;
+  my $configure = $args{configure};
+  
+  my %options = %{$args{options}};
+  my @parms = @{$options{parms}};
+  my ($handler, $module, $plambda) = @args{qw/handler module plambda/};
+
+  my @errors;
+  my @buildspec_warnings;
+  
+  my $account;
+  my $region;
+
+  my $buildspec = $plambda->get_lambda_config;
+  
+  my @required = qw/aws handler/;
+  my @recommended = qw/layers/;
+  my %layers;
+  
+  foreach my $section (qw/aws handler layers vpc-config environment timeout memory-size extra-libs/) {
+    
+    push @errors, "$section is required"
+      if (grep { /$section/ } @required) && ! $buildspec->get($section);
+
+#    push @buildspec_warnings, "the $section section of your buildspec was not found, but is recommended"
+#      if (grep { /$section/ } @recommended) && ! $buildspec->get($section);
+      
+    for ("$section") {
+    
+      log_debug("processing $section");
+
+      # aws:
+      #   profile: sandbox
+      #   account: 111111111111
+      #   role: lambda-role
+      #   region: us-east-1
+      /aws/ && do {
+        my $aws = $buildspec->get_aws || {};
+        
+        $region = $aws->{region} || "";
+        $account = $aws->{account} || "";
+        
+        $configure->{+AWS_PROFILE} = $aws->{profile} // $ENV{AWS_PROFILE};
+        $configure->{+AWS_ACCOUNT} = $account or push @errors, "  * specify an AWS account number";
+
+        # check to see if role exists
+        if ( $aws->{role} ) {
+          my $roles = list_roles(path_prefix =>'/');
+          my @role_names = $roles ? map { $_->{RoleName} } @{$roles->{Roles}} : ();
+          if ( ! grep { /^$aws->{role}$/ } @role_names ) {
+            push @buildspec_warnings, "role: '" . colored(['bright_red'], $aws->{role}) . "' does not currently exist!";
+          }
+          $configure->{+ROLE} = $aws->{role};
+        }
+        else{
+          push @errors, "  * specify a role for the Lambda";
+        }
+        
+        $configure->{+REGION} = $region or push @errors, "  * specify the AWS region";
+        next; 
+      };
+
+      # handler: Lambda.handler
+      /handler/ && do {
+        
+        unless ( -s "$module.pm" ) {
+          push @errors, "no module named $module.pm found - create $module.pm first";
+        }
+        
+        $configure->{+HANDLER} = $buildspec->get_handler or push @errors, "  * specify a handler name (example: Lambda.handler)";
+        next; 
+      };
+    
+      # vpc-config:
+      #   subnet-ids:
+      #     - subnet-08b5e355
+      #     - subnet-7b675d1f
+      #     - subnet-fe150fb5
+      #     - subnet-c0a6f0ff
+      #   securitygroup-ids:
+      #     - sg-55888722
+    
+      /vpc\-config/ && do {
+        if ($buildspec->get('vpc-config') && ref($buildspec->get('vpc-config')) eq 'HASH') {
+          my %vpc_config = %{$buildspec->get('vpc-config')};
+
+          if ( $vpc_config{'subnet-ids'} && reftype($vpc_config{'subnet-ids'}) eq 'ARRAY' ) {
+            $configure->{+VPC_CONFIG} = sprintf("SubnetIds=%s", join(",", @{$vpc_config{'subnet-ids'}}));
+          }
+      
+          if ( $vpc_config{'securitygroup-ids'} && reftype($vpc_config{'securitygroup-ids'}) eq 'ARRAY' ) {
+            $configure->{+VPC_CONFIG} .= sprintf(",SecurityGroupIds=%s", join(",", @{$vpc_config{'securitygroup-ids'}}));
+          }
+        }
+      
+        next; 
+      };
+
+      # environment:
+      #   DBI_DBNAME: foo
+      #   DBI_USER: bar
+      #   DBI_PASS: buz
+      /environment/ && do {
+        my $environment = { Variables => {} };
+        
+        if ( $buildspec->get_environment && reftype($buildspec->get_environment) eq 'HASH' ) {
+          if ( keys %{$buildspec->get_environment} ) {
+            $environment->{Variables} = $buildspec->get_environment;
+          }
+        }
+        
+        # we need to escape the JSON so we can feed this this on the
+        # command line to configure
+        $environment = to_json({ env => to_json($environment) });
+        
+        if ( $environment =~/^\{\"env\"\:(.*)\}$/ ) {
+          $configure->{+ENVIRONMENT} = "'" . $1 . "'";
+        }
+        else {
+          die "invalid environtment string: " . $environment;
+        }
+        
+        next; 
+      };
+
+      # timeout: 3
+      /timeout/ && do {
+        $configure->{+TIMEOUT} = $buildspec->get_timeout;
+        next; 
+      };
+
+      # memory-size: 128
+      /memory\-size/ && do {
+      
+        if ( $buildspec->get('memory-size') % 64 ) {
+          push @errors, "memory size must be multiple of 64";
+        }
+        else {
+          $configure->{+MEMORY_SIZE} = $buildspec->get('memory-size');
+        }
+        
+        next; 
+      };
+
+      # extra-libs:
+      #   - some-lib
+      /extra\-libs/ && do {
+        next; 
+      };
+      
+      /layers/ && do {
+        my $buildspec_layers = $buildspec->get_layers;
+        
+        %layers = %{$buildspec_layers}
+          if $buildspec_layers && reftype($buildspec_layers) eq 'HASH';
+        
+        next; 
+      };
+    }
+  }
+
+  my @available_runtimes = get_available_runtimes();
+  
+  unless ( keys %layers ) {
+    if ( my $runtime = is_runtime_built(plambda => $plambda ) ) {
+      push @buildspec_warnings, "no layers defined in buildspec.yml...using the built or downloaded runtime: " . colored(['bright_red'], $runtime);
+    }
+    else {
+      my $available_runtime = shift @available_runtimes;
+      
+      if ( $available_runtime ) {
+        push @buildspec_warnings, "no layers defined in buildspec.yml...using the default runtime that will be built (perl-runtime:$available_runtime is available).";
+      }
+      else {
+        push @buildspec_warnings, "no layers defined in buildspec.yml...using the default runtime that will be built.";
+      }
+    }
+  }
+  else {
+    my $version = $layers{'perl-runtime'} && $layers{'perl-runtime'}->{version} ? $layers{'perl-runtime'}->{version} : '';
+    
+    if ( $version && ! grep { /^$version$/ } @available_runtimes ) {
+      fatal_error("no perl-runtime layer availalble with version: $version");
+    }
+  }
+  
+  my $runtime_buildspec = $plambda->get_runtime_config;
+  
+  my @perl_versions = get_available_perl_versions();
+  my $current_perl_version = sprintf("%vd", $^V);
+  
+  if ( $options{version} && $options{version} eq 'system' ) {
+    $options{version} = '';
+  }
+
+  my $perl = $runtime_buildspec->get_perl || {};
+  
+  unless ( $perl->{version} || $options{version} ) {
+    # first see if we have already built the runtime
+    if ( is_runtime_built(plambda => $plambda) ) {
+      my $runtime_perl_version = ($plambda->get_runtime_config->get_perl && $plambda->get_runtime_config->get_perl->{version}) || "";
+      
+      if ( $runtime_perl_version && $current_perl_version ne $runtime_perl_version ) {
+        push @buildspec_warnings, colored(['bright_red'],"*IMPORTANT*") . " - your working version of perl is " . colored(['bright_red'], $current_perl_version) . ", but your runtime buildspec specifies a different version of perl (" . colored(['bright_red'], $runtime_perl_version) . ")";
+      }
+      elsif ( ! $runtime_perl_version ) {
+        push @buildspec_warnings, "no perl version specified in runtime-buildspec.yml...using system perl ($current_perl_version) to build runtime layer.";
+      }
+    }
+    else { 
+      # we nave to figure out the perl version to use
+      unless  ( @perl_versions ) {
+        push @buildspec_warnings, "no perl version specified in runtime-buildspec.yml...using system perl ($current_perl_version) to build runtime layer.";
+      }
+      else {
+        my $latest_perl_version = $perl_versions[0];
+        my $perl_layer = 'perl-' . $latest_perl_version;
+        $perl_layer =~s/\./_/g;
+        push @buildspec_warnings, "no perl version specified in runtime-buildspec.yml...using system perl ($current_perl_version) to build runtime layer ($perl_layer is available).";
+      }
+    }
+  }
+  else {
+    if ( $perl->{version} && ! $options{version} ) {
+      if ( $current_perl_version ne $perl->{version} ) {
+        push @buildspec_warnings, "your working version of 'perl' does not match the runtime version";
+      }
+    }
+    elsif ( $options{version} && $options{version} ne $current_perl_version ) {
+      push @buildspec_warnings, "your working version of 'perl' does not match the version you specified (" . $options{version} .")";
+    }
+    
+    if ( $options{version} && $options{version} =~/^5\.\d+\.\d+$/ ) {
+      $perl->{version} = $options{version};
+      my $version = $perl->{version};
+    
+      push @buildspec_warnings, "the version of 'perl' (" . $version . ") you specified in the runtime buildspec is not availalbe as a layer"
+        unless grep { /$version/ } @perl_versions;
+      
+      # changed perl version, so update config
+      $runtime_buildspec->dump_config;
+    }
+  }
+  
+  $configure->{+PERL_VERSION} = $perl->{version}
+    if $perl->{version};
+  
+  my $setup_path = ".plambda/configure";
+
+  # remove any old configure
+  unlink $setup_path;
+
+  foreach ( @buildspec_warnings ) {
+    warning_message($_);
+  }
+  
+  unless ( @errors ) {
+    log_debug( sub { Dumper [ $configure ] });
+    log_debug("writing $setup_path");
+    
+    open (my $fh, ">$setup_path") or die "could not open $setup_path for writing";
+    my $ts = localtime(time);
+    
+    my @script_header = (
+                         "#!/bin/bash",
+                         "#",
+                         "# Perl Lambda Runtime Framework Setup - autogenerated on $ts",
+                         "#",
+                         "# config: buildspec.yml",
+                         "#",
+                         "rm -f $module.log"
+                        );
+    
+    print $fh join("\n", @script_header), "\n";
+    log_debug(join("\n", @script_header));
+
+    my @script = ("./configure");
+    
+    foreach my $opt ( keys %$configure ) {
+      if ( $configure->{$opt} ) {
+        push @script, "\t$opt=" . $configure->{$opt};
+      }
+    }
+
+    print $fh join(" \\\n", @script), "\n";
+    log_debug(join(" \\\n", @script));
+
+    close $fh;
+    chmod 0755, $setup_path;
+  }
+  else {
+    non_fatal_error("could not initialize framework. See errors below:");
+    
+    foreach (@errors) {
+      non_fatal_error("\t=> $_");
+    }
+  }
+  
+  return -e $setup_path ? ($setup_path) : ();
+}
+
+1;

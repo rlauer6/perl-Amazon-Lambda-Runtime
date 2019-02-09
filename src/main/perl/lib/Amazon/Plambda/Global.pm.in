@@ -1,0 +1,47 @@
+package Amazon::Plambda::Global;
+
+use strict;
+use warnings;
+
+use parent qw/Amazon::Plambda::Config/;
+
+my @CONFIG_VARS = qw/version programs installdir builddir create-role runtime-environment cpan stub-file color/;
+
+__PACKAGE__->follow_best_practice;
+__PACKAGE__->mk_accessors(@CONFIG_VARS);
+
+sub new {
+  my $class = shift;
+  my $args = shift || {};
+  
+  $args->{config_vars} = \@CONFIG_VARS;
+  
+  $class->SUPER::new($args);
+}
+
+# version: @PACKAGE_VERSION@
+# programs:
+#   make:
+#     path: @MAKE@
+#   aws_cli:
+#     path: @aws_cli@
+#   pod2man:
+#     path: @pod2man@
+#   scandeps:
+#     enabled: yes
+#     path: @scandeps@
+#     args:
+#       - "-Rc"
+# installdir: @datadir@/plambda
+# builddir: src/main/perl/lambda
+# create-role: no
+# # default Lambda runtime environment configuration
+# runtime-environment:
+#   perl:
+#     version: 5.16.3
+# cpan:
+#   mirror-only: ~
+#   mirror: ~
+# stub-file: ~
+
+1;

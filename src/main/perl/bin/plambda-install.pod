@@ -1,0 +1,78 @@
+=pod
+
+=head1 NAME
+
+install
+
+=head1 SYNOPSIS
+
+ plambda install
+ plambda install lambda
+ plambda install runtime
+
+=head1 DESCRIPTION
+
+Installs your Lambda function or the custom Perl runtime layer to the
+AWS environment.  This command uses the AWS CLI to create or update a
+Lambda or to publish a new layer.
+
+ plambda install target
+
+=over 5
+
+=item I<Note:>
+
+In order to install your Lambda AND configure it to use the custom
+Perl runtime layer, the layer should have been previously built and
+installed. If the framework does not recognize that a build of the
+custom Perl runtime layer has been done yet, the framework will
+build and install the runtime automatically.
+
+=item I<Note:>
+
+You can force an install by using the C<--force> option.
+
+=back 
+
+=head1 PARAMETERS
+
+Supply the target of the install.  The default target is C<lambda> if
+no target is supplied.
+
+=over 5
+
+=item * runtime
+
+Installs (and possibly builds) the custom Perl runtime layer.
+
+=item * lambda
+
+Install (and possibly builds) the Lambda function deployment package.
+
+=back
+
+=head1 OPTIONS
+
+=over 5
+
+=item * --verbose
+
+=item * --dryrun
+
+=item * --force
+
+Use the C<--force> option to force an install even if the framework
+detects that the artifact has already been installed.
+
+B<C<--force> and C<--dryrun> cannot be used together>.  The C<--force>
+option will remove the indicators that an operation has been completed
+and force a new operation.
+
+=back
+
+=head1 SEE ALSO
+
+ plambda deploy help
+ plambda build help
+
+=cut

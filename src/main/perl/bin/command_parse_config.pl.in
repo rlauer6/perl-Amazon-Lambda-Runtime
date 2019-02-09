@@ -1,0 +1,60 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+sub command_parse_config {
+  my %args = @_;
+
+  my %options = %{$args{options}};
+  my @parms = @{$options{parms}};
+  
+  my ($handler, $module, $plambda) = @args{qw/handler module plambda/};
+
+  my $sub_command = $parms[0];
+  
+  for ("$sub_command") {
+    /layers/ && do {
+      my $lambda_config = $plambda->get_lambda_config();
+      my $layers = $lambda_config->get_layers() || {};
+        
+      my $region = $lambda_config->get_aws->{region};
+      my $account = $lambda_config->get_aws->{account};
+      
+      my @layer_arns;
+        
+      foreach my $layer_name (keys %{$layers}) {
+        next unless $layer_name && reftype($layers->{$layer_name}) eq 'HASH' && $layers->{$layer_name}->{version};
+        
+        push @layer_arns, sprintf("arn:aws:lambda:%s:%s:layer:%s:%s",
+                                  $region, $account,
+                                  $layer_name,
+                                  $layers->{$layer_name}->{version});
+      }
+      
+      print join("\n", @layer_arns), "\n"
+        if @layer_arns;
+      
+      last;
+    };
+    
+    /extra-libs/ && do {
+      my $extra_libs;
+      
+      my $config = $options{runtime} ? $plambda->get_runtime_config : $plambda->get_lambda_config;
+      
+      $extra_libs = $config->get('extra-libs');
+      
+      if ( $extra_libs && reftype($extra_libs) eq 'ARRAY' ) {
+        print join("\n", @{$extra_libs}), "\n";
+      }
+      
+      last;
+    };
+      
+    fatal_error("unknown sub-command: $sub_command");
+  }
+  
+}
+
+1;

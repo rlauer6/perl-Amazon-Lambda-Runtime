@@ -1,0 +1,96 @@
+=pod
+
+=head1 NAME
+
+state
+
+=head1 SYNOPSIS
+
+ plambda state
+
+  .----------------------------------------------------------------.
+  |                          Lambda State                          |
+  +--------+-----------+-----------+------------+------------------+
+  | Name   | Module    | Installed | Function   | CPRL             |
+  +--------+-----------+-----------+------------+------------------+
+  | Lambda | Lambda.pm | yes       | re-install | perl-runtime:193 |
+  '--------+-----------+-----------+------------+------------------'
+
+=head1 DESCRIPTION
+
+Reports the current state of your Lambda development. When developing
+your Lambda functions you may want to know if your Lambda has been
+deployed properly.  I<Properly> can mean that the current code is the
+same as that installed to the AWS environment and the function is
+configured to use the same CPRL (runtime) you developing against.  The
+C<state> command will analyze the current state of your Lambda and
+build tree. The command will:
+
+=over 5
+
+=item * ...determine if your Lambda module specified in the buildspec exists
+
+=item * ...determine if your Lambda module has been built and is up-to-date
+
+=item * ...determine if the Lambda package has been deployed to the AWS environment
+
+=item * ...determine if the Lambda package is identical to the one deployed to the AWS environment
+
+=item * ...reports the current state of the runtime layer
+
+=back
+
+Columns will be color coded to suggest the current state and
+potential actions you might want to take.
+
+=over 5
+
+=item Module
+
+=over 10
+
+=item * green => current
+
+=item * yellow => has changed, re-build
+
+=back
+
+=item Function
+
+=over 10
+
+=item * green => installed and current
+
+=item  * red => needs to be re-built & re-installed
+
+=item * yellow => needs to be installed
+
+=item * --- => not installed
+
+=back
+
+=item CPRL
+
+=over 10
+
+=item * green => function specifies a valid installed runtime
+
+=item * red => function is out of sync with working runtime
+
+=item * yellow => function specifies a valid runtime but there is no working runtime in your build tree
+
+=item * --- => there is no availalbe runtime installed in the AWS environment
+
+=back
+
+=back
+
+=head1 OPTIONS
+
+None.
+
+=head1 SEE ALSO
+
+ plambda list function
+
+=cut

@@ -1,0 +1,191 @@
+#!@bashrun@
+# -*- mode: sh; -*-
+
+# plambda helper script
+
+function check_plambda_home {
+    if test -z "$PLAMBDA_HOME"; then
+        echo "ERROR: no PLAMBDA_HOME set!";
+        exit 1;
+    fi
+
+    pushd $PLAMBDA_HOME >/dev/null
+}
+
+function cleanup {
+    test -n "$result" && rm -f "$result";
+    test -n "$temp_layers" && rm -f "$temp_layers";
+}
+
+function calculate_sha256 {
+    file="$1"
+    if test -s "$file"; then
+        echo -e $(@openssl@ dgst -sha256 -binary $file | openssl enc -base64)
+    fi
+}
+
+# by fetching a new runtime layer, we'll have to rebuild the Lambda
+# package against the new runtime environment
+
+function fetch_function {
+    function_name="$1"
+    
+    if test -z "$function_name"; then
+        exit 1;
+    fi
+    
+    check_plambda_home;
+
+    result=$(mktemp)
+    location=$(@aws_cli@ lambda get-function --function-name $function_name | jq -r '.Code.Location')
+    
+    if test -n "$location"; then
+        @curl@ -s "$location" > $result
+        if test -s "$result"; then
+            sha256=$(calculate_sha256 $result)
+            echo -n "$sha256 $result"
+        fi
+    fi
+}
+
+function fetch_runtime_layer {
+    check_plambda_home;
+    
+    # fetching a runtime layer will force a rebuild of a Lambda
+    @MAKE@ clean
+    
+    version="$1";
+    
+    if test -z "$version"; then
+        echo "ERROR: plambda-utils fetch-layer version";
+        exit 1;
+    fi
+    
+    trap 'cleanup' EXIT
+    
+    lambdadir=${PLAMBDA_HOME}/src/main/perl/lambda
+    pushd $lambdadir >/dev/null
+    
+    result=$(mktemp)
+    result_err=$(mktemp)
+    
+    # download the layer...
+    @aws_cli@ lambda get-layer-version --version-number $version --layer-name $RUNTIME  >$result
+
+    location=$(cat $result | @jq@ -r .Content.Location)
+    @curl@ "$location" > perl-runtime.zip
+    
+    echo $(cat $result | @jq@ -r .LayerVersionArn) > runtime_layer_arn
+    temp_layers=$(mktemp)
+    
+    if test -e "$PLAMBDA_HOME/buildspec.yml"; then
+        plambda parse-config layers > layers
+    
+        if ! grep -q $(cat runtime_layer_arn) layers; then
+            echo "WARNING: Your buildspec does not include the layer you've fetched."
+            echo "         Edit your buildspec to include the new layer."
+        fi
+   
+        # has this changed the layers?
+        if test -e "layers"; then
+            cat runtime_layer_arn layers | sort -u > $temp_layers
+            if ! cmp $temp_layers layers; then
+                cp $temp_layers layers
+            fi
+        fi
+    else
+        echo "WARNING: make sure to create a buildspec!"
+    fi
+    
+    mkdir -p ${lambdadir}/cache/runtime
+    
+    # unzip the layer in the cache directory
+    @unzip@ ${lambdadir}/perl-runtime.zip -d ${lambdadir}/cache/runtime
+
+    # restore the runtime-buildspec.yml and runtime-cpanfile
+    for a in runtime-buildspec.yml runtime-cpanfile; do
+        if test -e ${lambdadir}/cache/runtime/plambda/$a; then
+            cp ${lambdadir}/cache/runtime/plambda/$a ${PLAMBDA_HOME}/
+        fi
+    done
+    
+    # essentially we want to make sure we do not create/install another layer
+    @MAKE@ runtime-module
+    @MAKE@ -t runtime_layer_arn
+    
+    popd >/dev/null
+}
+
+function usage {
+    echo <<EOF
+usage: plambda-utils [options] command parameters
+
+Options
+-------
+-h      help
+
+Commands
+--------
+fetch-layer version    - reads a perl-runtime layer from the AWS environment
+
+EOF
+}
+
+# +--------------------+
+# | SCRIPT STARTS HERE |
+# +--------------------+
+
+RUNTIME="perl-runtime"
+
+set -e -o pipefail
+
+if test -n "$DEBUG"; then
+    set -x
+fi
+
+OPTS=$(getopt -o h -- "$@")
+
+if [ $? -ne 0 ]; then
+    echo "could not parse options"
+    exit $?
+fi
+
+eval set -- "$OPTS"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+	-h)
+	    usage;
+	    ;;
+	--)
+	    break;
+	    ;;
+	*)
+	    break;
+	    ;;
+    esac
+done
+
+shift;
+command="$1"
+shift;
+
+case "$command" in
+    fetch-layer)
+        fetch_runtime_layer $1
+        ;;
+    
+    fetch-function)
+        fetch_function $1;
+        ;;
+    
+    sha256)
+        calculate_sha256 $1;
+        ;;
+    *)
+        echo "unknown command: $command";
+        exit;
+        ;;
+esac
+
+

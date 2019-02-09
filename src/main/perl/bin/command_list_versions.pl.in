@@ -1,0 +1,19 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+sub command_list_versions {
+  my %args = @_;
+  my %options = %{$args{options}};
+  my $module = $args{module};
+  
+  my $versions = list_versions_by_function(module => $module, %options);
+  
+  if ( $versions ) {
+    push @$versions, '$LATEST';
+    print join("\n", @$versions), "\n";
+  }
+}
+
+1;

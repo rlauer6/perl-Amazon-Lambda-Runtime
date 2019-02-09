@@ -1,0 +1,20 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+sub command_list_roles {
+  my %args = @_;
+  my %options = %{$args{options}};
+  my @parms = @{$options{parms}};
+  
+  my ($handler, $module, $plambda) = @args{qw/handler module plambda/};
+
+  my $path_prefix = $parms[1] ? $parms[1] : ($options{all} ? '/' : '/plambda/');
+    
+  my $roles = list_roles(path_prefix => $path_prefix);
+
+  print join("\n", map { $_->{RoleName} } @{$roles->{Roles}}), "\n"
+    if $roles;
+}
+1;

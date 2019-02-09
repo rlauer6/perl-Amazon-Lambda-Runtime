@@ -1,0 +1,23 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+sub command_clean {
+  my %args = @_;
+  my %options = %{$args{options}};
+  my @parms = @{$options{parms}};
+  
+  my ($handler, $module, $plambda) = @args{qw/handler module plambda/};
+
+  my $lambda_dir = $plambda->builddir;
+  
+  my $cwd = getcwd();
+  
+  chdir $plambda->builddir;
+
+  make($parms[0] && $parms[0] eq 'lambda' ? 'mostlyclean' : 'clean');
+
+  chdir $cwd;
+}
+1;

@@ -1,0 +1,82 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+use JSON;
+use Scalar::Util qw/reftype/;
+
+sub command_publish {
+  my %args = @_;
+
+  my %options = %{$args{options}};
+  my @parms = @{$options{parms}};
+  my $sub_command = $parms[0] || "";
+
+  my ($handler, $module, $plambda) = @args{qw/handler module plambda/};
+  
+  for ("$sub_command") {
+    /function/ && do {
+                
+      my $output = list_functions();
+
+      my $functions = $output->{Functions};
+      my @function_names = map { $_->{FunctionName} } @$functions;
+  
+      my $function_map = {};
+      @{$function_map}{@function_names} = @$functions;
+      
+      if ( grep { /$module/ } @function_names ) {
+        my $revision_id = $function_map->{$module}->{RevisionId};
+    
+        print sprintf("%s...publishing %s\n", $options{dryrun} ? "(dryrun)" : "", $module)
+          if ( $options{verbose} || $options{dryrun} );
+    
+        my $output = publish_version(module => $module, revision_id => $revision_id, %options);
+    
+        unless ( $options{dryrun} ) {
+          if ( $output ) {
+            print $output->{FunctionArn}, "\n";
+          }    
+          else {
+            fatal_error("could not publish $module");
+          }
+        }
+      }
+      last;
+    };
+
+    /runtime/ && do {
+      fatal_error("no runtime available to publish")
+        unless -e $plambda->builddir . '/perl-runtime.zip';
+      
+      # maxlength: 256
+      my $description = to_json({
+                                 CPRL => sprintf("%s", '@PACKAGE_VERSION@'),
+                                 perl => sprintf("%vd", $^V),
+                                 alias => $options{alias} || $plambda->get_runtime_config->get_alias || ""
+                                });
+      my $layer = eval {
+        publish_layer_version(
+                              layer_name  => 'perl-runtime',
+                              zip_file    => $plambda->builddir . '/perl-runtime.zip',
+                              description => $description,
+                              %args
+                             );
+      };
+      
+      if ( $layer && reftype($layer) eq 'HASH' ) {
+        print $layer->{LayerVersionArn};
+      }
+      else {
+        fatal_error("could not publish layer: $@");
+      }
+      
+      last;
+    };
+    
+    fatal_error("unknown parameter $_");
+  }
+}
+
+1;

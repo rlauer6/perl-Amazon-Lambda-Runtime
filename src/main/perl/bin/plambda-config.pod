@@ -1,0 +1,85 @@
+=pod
+
+=head1 NAME
+
+config
+
+=head1 SYNOPSIS
+
+ plambda config
+
+=head1 DESCRIPTION
+
+Configures the Lambda project by reading a file named
+`buildspec.yml`. The command will interpret the buildspec and report
+any errors encountered.
+
+See C<plambda init help> for more details on the format of the buildspec file.
+
+The Lambda handler class that you defined in your buildspec must exist
+before invoking the C<config> command.
+
+The C<config> command will create a F<runtime-buildspec.yml> file if
+it does not currently exist. The F<runtime-buildspec.yml> file is used
+to specify attributes of the custom Perl runtime layer.
+
+ --- 
+ extra-libs: ~
+ perl: 
+   version: 5.28.1
+
+If no version of C<perl> is specified in the F<runtime-buildspec.yml>
+file AND there exists a Perl layer available that is the same version
+as your working version of C<perl> AND you do not currently have a
+runtime built in your project tree then your wokring version of
+C<perl> will be written to your F<runtime-buildspec.yml> file.  An
+available Perl layer is defined as one whose name matches this regexp:
+
+ /^perl\-5\.\d+\.\d+$/
+
+Otherwise, if no version is specified and there is no layer matching
+your working version of C<perl> then no version of C<perl> will be
+specified.  This means that system version of C<perl will be used in
+your runtime.
+
+You can specify additional shared libraries to install in the
+C<extra-libs> section of the runtime buildspec file.
+
+ extra-libs:
+   - /usr/lib64/mysql/libmysqlclient.so.18.0
+
+You can add shared libraries to either the runtime package or the
+Lambda package depending on your preference.  If you want a suite of
+Lambdas to all have a common runtime and they will need access to the
+same shared libraries, you may want to package the libraries with the
+runtime, otherwise for Lambdas with special requirements, package the
+libraries with the Lambdas.  Your needs should dictate this decision.
+
+=head1 OPTIONS
+
+=over 5
+
+=item * --version 
+
+The version of C<perl> to use in the runtime layer. If no version is
+specified or you specify 'system' for this option, then the runtime
+will use the system version of C<perl>.  Note that if you specify a
+version of C<perl> there must be a corresponding layer that installs
+that version in the F</opt/perl-{version}> directory.
+
+Example:
+
+ plambda --version 5.28.1 config
+
+=item * --verbose
+
+Reports additional information during the configuration process.
+
+=back
+
+=head1 SEE ALSO
+
+ plambda init
+
+=cut
+

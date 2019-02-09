@@ -1,0 +1,63 @@
+=pod
+
+=head1 NAME
+
+delete
+
+=head1 SYNOPIS
+
+ plambda delete layer
+ plambda delete lambda
+
+=head1 DESCRIPTION
+
+Delete custom Perl runtime layers or Lambda functions from the AWS
+environment.
+
+=head1 OPTIONS
+
+=over 5
+
+=item * function | lambda
+
+Removes the latest function (and all vesions) or a specific version of
+a function if the C<--version> option is provided.
+
+=item * runtime
+
+Deletes custom Perl runtime layers from the AWS environment.  If
+you've been installing custom Perl runtimes, you may be accumulating them
+unnecessarily. This is a convenience command that executes the
+C<delete-layer-version> CLI command.  You can delete the I<latest
+version (default)>, I<a specific version>, or I<all of the
+older versions while keeping the latest version>.
+
+=item * --old
+
+Delete only the older versions, do not delete the latest version. Note
+that unlike Lambdas, layers do not have the concept of the $LATEST
+version. You can only I<publish> layer versions and each layer is given a
+monotonically incrementing value.
+
+When a Lambda is installed, it is configured to use a I<specfic
+version> of the custom Perl runtime layer.
+
+=item * --dryrun
+
+Report what will be deleted, but do not delete anything.
+
+=item * --version
+
+Specify the version to delete.  The default is to delete the latest
+version.  Should be an integer.  Note that by default, when you
+install a Lambda it is B<not> given a version number.  In order to
+version your Lambdas you must publish a version.
+
+ aws lambda publish-version --function-name --revision-id
+
+=back
+
+=head1 SEE ALSO
+
+=cut
+

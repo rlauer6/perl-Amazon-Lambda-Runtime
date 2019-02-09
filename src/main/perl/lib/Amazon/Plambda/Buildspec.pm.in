@@ -1,0 +1,49 @@
+package Amazon::Plambda::Buildspec;
+
+use strict;
+use warnings;
+
+use parent qw/Amazon::Plambda::Config/;
+
+# --- 
+# aws: 
+#   account: '311974035819'
+#   region: us-east-1
+#   role: perl-lambda-vpc-role
+# environment: ~
+# extra-libs: ~
+# handler: Lambda.handler
+# layers: 
+#   perl-5_28_1: 
+#     version: 1
+#   perl-runtime: 
+#     version: 204
+# memory-size: 256
+# timeout: 3
+# version: 0.0.1
+# vpc-config: 
+#   securitygroup-ids: 
+#     - sg-fa8f808d
+#   subnet-ids: 
+#     - subnet-08b5e355
+#     - subnet-7b675d1f
+#     - subnet-fe150fb5
+#     - subnet-c0a6f0ff
+#
+
+
+my @CONFIG_VARS = qw/aws environment handler layers extra-libs memory-size timeout version vpc-config cpan scandeps/;
+
+__PACKAGE__->follow_best_practice;
+__PACKAGE__->mk_accessors(@CONFIG_VARS);
+
+sub new {
+  my $class = shift;
+  my $args = shift || {};
+  
+  $args->{config_vars} = \@CONFIG_VARS;
+  
+  $class->SUPER::new($args);
+}
+
+1;

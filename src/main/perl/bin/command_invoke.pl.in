@@ -1,0 +1,102 @@
+#!/bin/env perl
+
+use strict;
+use warnings;
+
+use MIME::Base64;
+
+sub command_invoke {
+  my %args = @_;
+
+  my %options = %{$args{options}};
+  my @parms = @{$options{parms}};
+  
+  my ($handler, $module, $plambda) = @args{qw/handler module plambda/};
+  
+  my $context;
+  my $payload;
+  my $version = $options{version};
+  my $outfile;
+  my %INVOCATION_TYPES =  (
+                           'response' => 'RequestResponse',
+                           'event' => 'Event',
+                           'dryrun' => 'Dryrun'
+                          );
+
+  my %LOG_TYPES = (
+                   'none' => 'None',
+                   'tail' => 'Tail'
+                  );
+  
+  my $log_type = $LOG_TYPES{none};
+  my $invocation_type = $INVOCATION_TYPES{response};
+  
+  while (@parms) {
+    my $var = shift @parms;
+    
+    for ("$var") {
+      
+      /^type/ && do {
+        my $type = shift @parms;
+        $invocation_type = $INVOCATION_TYPES{$type} || $INVOCATION_TYPES{response};
+        last;
+      };
+
+      /^log(\-type)?$/ && do {
+        $log_type = shift @parms;
+        $log_type = $LOG_TYPES{$log_type} || $LOG_TYPES{none};
+        last;
+      };
+
+
+      /^context$/ && do {
+        $context = shift @parms;
+        
+        if ( $context =~/^fileb:\/\/(.*)$/ ) {
+          my $file = $1;
+          if ( -s $file ) {
+            $context = read_file($1);
+            chomp $context;
+          }
+          else {
+            fatal_error("$context is empty or not found.");
+          }
+        }
+        else {
+          $context = encode_base64($context);
+          chomp $context;
+        }
+        
+        last;
+      };
+      
+      /^payload$/ && do {
+        $payload = shift @parms;
+        last;
+      };
+
+      /^(version|qualifier)$/ && do {
+        $version = shift @parms;
+        last;
+      };
+      
+      /^outfile$/ && do {
+        $outfile = shift @parms;
+        last;
+      };
+
+      fatal_error("unknown parameter: $var");
+    }
+  }
+  
+  invoke(module  => $module,
+         version => $version,
+         outfile => $outfile || $options{outfile},
+         payload => $payload,
+         context => $context,
+         log_type => $log_type,
+         invocation_type => $invocation_type,
+         %options);
+}
+
+1;

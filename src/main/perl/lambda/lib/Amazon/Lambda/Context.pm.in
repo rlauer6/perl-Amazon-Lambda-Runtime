@@ -1,0 +1,157 @@
+package Amazon::Lambda::Context;
+
+use strict;
+use warnings;
+
+use parent qw/Class::Accessor Exporter/;
+
+use JSON;
+
+use Time::HiRes qw[gettimeofday tv_interval];
+
+__PACKAGE__->follow_best_practice;
+__PACKAGE__->mk_accessors(qw/
+                              headers
+                              function_name functionName
+                              function_version functionVersion
+                              log_group_name logGroupName
+                              log_stream_name logStreamName
+                              memory_limit_in_mb memoryLimitInMB
+                              function_memory_size functionMemorySize
+                              client_context clientContext
+                              deadlineMS deadline_ms
+                              aws_request_id awsRequestId 
+                              invoked_function_arn invokedFunctionArn/
+                         );
+
+use vars qw/$VERSION @EXPORT/;
+
+$VERSION = '@PACKAGE_VERSION@'; $VERSION=~s/\-.*$//;
+
+@EXPORT = qw/$VERSION/;
+
+=pod
+
+=head1 NAME
+
+C<Amazon::Lambda::Context>
+
+=head1 SYNOPSIS
+
+ my $context = new Amazon::Lambda::Context({ headers => });
+
+Provides the Lamda C<context> object to Lambda handlers.  Used
+internally by C<Amazon::Lambda::Runtime> and should not be normally
+called by applications.
+
+=head1 DESCRIPTION
+
+Unloads the environment and headers and provides convenience routines
+to retrieve context information for current Lambda invocation.
+
+=head1 METHODS
+
+=head2 Context Attribute Getter Methods
+
+Note you can use the I<snake case> version of these methods to
+retrieve the same information.
+
+=head3 functionName
+
+=head3 functionVersion
+
+=head3 logGroupName
+
+=head3 logStreamName
+
+=head3 memoryLimitInMb
+
+=head3 deadlineMs
+
+=cut
+
+sub set_cc_sn {
+  my $self = shift;
+  my ($key, $val) = @_;
+
+  my $cc_key = lcfirst join('', map { ucfirst $_ } split '_', $key);
+  $self->set($key, $val);
+  $self->set($cc_key, $val);
+}
+
+sub new {
+  my $class = shift;
+  my $self = $class->SUPER::new(@_);
+  
+  foreach my $var (qw/function_name function_version log_group_name log_stream_name function_memory_size/) {
+    my $env_var = 'AWS_LAMBDA_' . uc $var;
+    $self->set_cc_sn($var, $ENV{$env_var});
+  }
+  
+  $self->set_cc_sn('memory_limit_in_mb', $self->get_functionMemorySize);
+
+  # context members from headers
+  my $headers = $self->get_headers;
+
+  my $client_context = $headers->header('lambda-runtime-client-context');
+    
+  if ( $client_context && length($client_context) ) {
+    $self->set_cc_sn('client_context', from_json($client_context));
+  }
+
+  $self->set_cc_sn('invoked_function_arn', $headers->header('lambda-runtime-invoked-function-arn'));
+  $self->set_cc_sn('deadline_ms', $headers->header('lambda-runtime-deadline-ms'));
+  $self->set_cc_sn('aws_request_id', $headers->header('lambda-runtime-aws-request-id'));
+
+  $self;
+}
+
+=pod
+
+=head2 getRemainingTimeInMillis
+
+Returns the number of milliseconds remainging for your Lambda
+execution based on the C<deadline_ms> value in the context object.
+
+=cut
+
+sub getRemainingTimeInMillis {
+  my $self = shift;
+  
+  my ($s, $m) = gettimeofday;
+  
+  return $self->get_deadline - ($m * 1000);
+}
+
+=pod
+
+=head2 get_remaining_time_in_millis
+
+Snake case version of C<getRemainingTimeInMillis>.
+
+=cut
+
+sub get_remaining_time_in_millis {
+  goto &getRemainingTimeInMillis;
+}
+
+
+=pod
+
+=head1 SEE OTHER
+
+C<Amazon::Lambda::Runtime>
+
+=head1 AUTHOR
+
+Rob Lauer - <rlauer6@comcast.net>
+
+=head1 COPYRIGHT
+
+(c) Copyright 2019 Robert C. Lauer. All rights reserved.  This module
+is free software. It may be used, redistributed and/or modified under
+the same terms as Perl itself.
+
+=cut
+
+1;

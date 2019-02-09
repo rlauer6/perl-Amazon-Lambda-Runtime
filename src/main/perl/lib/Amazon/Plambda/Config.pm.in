@@ -1,0 +1,186 @@
+package Amazon::Plambda::Config;
+
+use strict;
+use warnings;
+
+use parent qw/Class::Accessor/;
+
+use Scalar::Util qw/reftype/;
+use YAML::Syck;
+
+my @CONFIG_VARS = qw/config path config_vars/;
+
+__PACKAGE__->follow_best_practice;
+__PACKAGE__->mk_accessors(@CONFIG_VARS);
+
+sub new {
+  my $class = shift;
+  
+  my $self = $class->SUPER::new(@_);
+  
+  die "no config object defined in constructor\n"
+    unless $self->get_config;
+
+  die "no path to config defined in constructor\n"
+    unless $self->get_path;
+  
+  $self->load_config;
+  
+  $self;
+}
+
+sub get_path_to_config { sprintf("%s/%s.yml", $_[0]->get_path, $_[0]->get_config); }
+
+sub dump_config {
+  my $self = shift;
+  
+  my $path = $self->get_path_to_config;
+
+  # backup config file
+  if ( -e $path ) {
+    unlink $path . '~';
+    rename $path, $path . '~';
+  }
+  
+  # try to save it, if no-go, then restore backup if it exists
+  eval {
+    DumpFile($path, $self->as_obj);
+  };
+
+  my $err = $@;
+  
+  if ( $@ ) {
+    rename $path . '~', $path
+      if -e $path . '~';
+    
+    die "$@";
+  }
+  
+  return $path
+}
+
+sub load_config {
+  my $self = shift;
+
+  my $path = $self->get_path_to_config;
+  
+  my $obj;
+
+  if ( -s $path ) {
+    $obj = LoadFile($path);
+  
+    foreach (keys %$obj) {
+      $self->set($_, $obj->{$_});
+    }
+  }
+  else {
+    open (my $fh, ">", $path) or die "could not create $path\n";
+    print $fh "---\n";
+    close $fh;
+    
+    $obj = $self->load_config;
+  }
+  
+  
+  return $obj;
+}
+  
+sub _copy {
+  my $obj = shift;
+
+  unless ( ref($obj) ) {
+    return $obj;
+  }
+  elsif ( reftype($obj) eq 'HASH' ) {
+    my $copy = {};
+
+    foreach (keys %$obj) {
+      $copy->{$_} = _copy($obj->{$_});
+    }
+    
+    return $copy;
+  }
+  else {
+    return [@{$obj}];
+  }
+}
+
+sub as_obj {
+  my $self = shift;
+  my $obj = {};
+  
+  foreach (@{$self->get_config_vars}) {
+    $obj->{$_} = _copy($self->get($_));
+  }
+  
+  return $obj;
+}
+
+sub update_config {
+  my $self = shift;
+  my $path = shift;
+  my $value = shift;
+
+  my @node = split "/", $path;
+  # can start with '/' or not
+  shift @node
+    unless $node[0];
+  
+  my $last_node = pop @node;
+  
+  my $obj = $self->as_obj;
+  my $config = $obj;
+  
+  my $remove_node;
+  my $add_node;
+  
+  foreach ( @node ) {
+    if ( $obj->{$_} ) {
+      $obj = $obj->{$_};
+    }
+    elsif ( /^[\+\-](.*)$/ ) {
+      $obj->{$1} = [];
+      $obj = $obj->{$1};
+    }
+    else {
+      $obj->{$_} = {};
+      $obj = $obj->{$_};
+    }
+  }
+  
+  if ( $last_node =~/^\+(.*)$/ ) {
+    $last_node = $1;
+   
+    $obj->{$last_node} = []
+      unless ref($obj->{$last_node}) && reftype($obj->{$last_node}) eq 'ARRAY';
+  }
+  elsif ( $last_node =~/^\-(.*)$/ ) {
+    $last_node = $1;
+    $remove_node = $value;
+  }
+  elsif ( ! $obj->{$last_node} ) {
+    $obj->{$last_node} = {};
+  }
+
+  if ( ref($obj->{$last_node}) && reftype($obj->{$last_node}) eq 'ARRAY' ) {
+    if ( $remove_node ) {
+      my @vals = @{$obj->{$last_node}};
+      $obj->{$last_node} = [ map { $_ ne $remove_node ? $_ : () }  @vals];
+      $obj->{$last_node} = undef
+        unless @{$obj->{$last_node}};
+    }
+    elsif ( $remove_node ) {
+      fatal_error("no array element " . $value);
+    }
+    else {
+      push @{$obj->{$last_node}}, $value;
+    }
+  }
+  else {
+    $obj->{$last_node} = $value;
+  }
+
+  return $config;
+}
+
+1;

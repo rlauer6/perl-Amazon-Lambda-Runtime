@@ -1,0 +1,8 @@
+requires "Scalar::Util" => "0";
+requires "Data::Dumper" => ">= 2.173";
+requires "Class::Accessor" => "0";
+requires "Encode" => "0";
+requires "Date::Format" => "0";
+requires "JSON" => "0";
+requires "LWP::UserAgent" => "0";
+requires "LWP::Protocol::https" => "0";

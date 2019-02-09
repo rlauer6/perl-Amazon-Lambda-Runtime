@@ -1,0 +1,260 @@
+=pod
+
+=head1 NAME
+
+init
+
+=head1 SYNOPSIS
+
+ plambda init
+
+=head1 DESCRIPTION
+
+Creates a buildspec template and handler stub for your Lambda project.
+
+=head1 OPTIONS
+
+No options are required.
+
+=over 5
+
+=item * --account
+
+The AWS account number associate with the credentials or role being
+used. If not provided I<plambda> will try to get the account number by
+invoking the STS I<get-caller-identity> API.
+
+=item * --force
+
+Normally the I<init> command will not create a buildspec template if
+an existing file specified by the C<--outfile> option of the same name
+already exists.  Use the C<--force> option to force creation of the
+template.
+
+=item * --handler
+
+The name of your Lambda and handler.  This should be the dot ('.')
+separated name of the Perl module that contains your handler and the
+method name that implments your handler.
+
+If no handler of that name exists, then a stub will be created in the
+current directory.  The file name will be the module name with a
+C<.pm> extension.
+
+Example:
+
+ plambda --handler MyHandler init
+
+=item * --outfile
+
+Name of the output file to create.  By default the command will output
+a buildspec template to STDOUT. Note that the I<config> command requires a
+file specifically named `buildspec.yml` but you can use this option to
+create a file of any name.
+
+=item * --region
+
+The AWS region. By default the region will be read from the AWS CLI
+configuration.
+
+=item * --role
+
+The IAM role to configure for your Lambda.  If no role is provided,
+the role name will correspond to you handler name with a suffix of
+'-role'.  For example, if your handler name is MyHandler, then the
+role name will be 'myhanldler-role'.
+
+A role is B<NOT> automatically created for you.
+
+=item * --verbose
+
+Reports progress and results of I<init> command.
+
+=back
+
+=head1 Buildspec Format
+
+The buildspec is a YAML formatted text file (typically named
+F<buildspec.yml>) that controls the packaging and configuration of
+your Lambda.  Before you can create a Lambda package, you need to
+create a buildspec file and then issue the C<config> command.  Each
+time you change the buildspec file you re-run the C<config>
+command. An example buildspec is shown below.
+
+  aws:
+    profile: sandbox
+    account: 111111111111
+    role: perl-lambda-vpc-role
+    region: us-east-1
+  handler: MyLambda.handler
+  layers:
+    perl-runtime:
+      version: 128
+    perl-5_28_1:
+      version: 1
+  vpc-config:
+    subnet-ids:
+      - subnet-08b5e355
+    securitygroup-ids:
+      - sg-55888722
+  environment:
+    DBI_DBNAME: mydb
+    DBI_USER: user
+    DBI_PASS: password
+    DBI_HOST: somerds.cbjxu8mkvkk3.us-wes-1.rds.amazonaws.com
+  timeout: 3
+  memory-size: 128
+  extra-libs:
+    - /usr/lib64/mysql/libmysqlclient.so.18
+
+The format of the buildspec file is describe below.
+
+=over 5
+
+
+=item * aws
+
+Provides basic information about the AWS account and Lambda
+environment.
+
+=item * handler
+
+The name of the Lambda handler.
+
+=item * layers
+
+Specifies the layers that your Lambda will use.  Each section within
+the layer section should specify the name of the layer and the
+version.
+
+Example:
+
+ layers:
+   perl-runtime:
+     version: 138
+   perl-5_28_1:
+     version: 1
+
+This section is optional. If you do not provide a C<layers> section
+than you will essentially be executing your Lambda using the system
+perl inside the Lambda environment. In that case, you should make sure
+that your current working perl version is also the same as the system
+perl in the Lambda environment.  Although, you may find that the
+environment you are developing does not impact your running Lambdas,
+you make find it necessary to specify different versions of modules in
+your cpanfile.
+
+=item * vpc-config
+
+If you need to access resources in your VPC, configure the subnets and
+security groups here.
+
+Example:
+
+ vpc-config:
+   subnet-ids:
+     - subnet-08b5e355
+   securitygroup-ids:
+     - sg-55888722   subnets:
+
+Be aware your Lambda will also need IAM permissions specifically
+allowing it to run within your VPC. From the AWS documentation:
+
+I<AWS Lambda runs your function code securely within a VPC by
+default. However, to enable your Lambda function to access resources
+inside your private VPC, you must provide additional VPC-specific
+configuration information that includes VPC subnet IDs and security
+group IDs. AWS Lambda uses this information to set up elastic network
+interfaces (ENIs) that enable your function to connect securely to
+other resources within your private VPC.>
+
+...and further...
+
+I<The Lambda function execution role must have permissions to create,
+describe and delete ENIs. AWS Lambda provides a permissions policy,
+AWSLambdaVPCAccessExecutionRole, with permissions for the necessary
+EC2 actions (ec2:CreateNetworkInterface,
+ec2:DescribeNetworkInterfaces, and ec2:DeleteNetworkInterface) that
+you can use when creating a role.>
+
+Here's an example of creating an appropriate role:
+
+  cat >assume-role-policy-document.jso <<EOF
+  {
+      "Version": "2012-10-17",
+      "Statement": [
+          {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                  "Service": "lambda.amazonaws.com"
+              }
+          }
+      ]
+  }
+  EOF
+  
+  aws iam create-role --role-name my-lambda-role --assume-role-policy-document file://assume-role-policy-document.json
+
+  aws iam attach-role-policy --role-name my-lambda-role \
+       --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole 
+
+=over 10
+
+=item * subnets
+
+A list of subnets that your Lambda can access.
+
+=item * securitygroup-ids
+
+The security group associated with your Lambda.
+
+=back
+
+=item * environment
+
+Add custom enviroment variables in this section.
+
+ environment:
+   LOG_LEVEL: debug
+
+The C<Amazon::Lambda::Framework> will look for the LOG_LEVEL environment variable when instantiating your handler. Allowed values are:
+
+=over 10
+
+=item * debug
+
+=item * info
+
+=item * warn
+
+=item * error
+
+=item * fatal
+
+=back
+
+=item * timeout
+
+The default timeout for Lambda functions is 3s. You can change that
+value by setting this value.
+
+=item * memory-size
+
+The default memory size is 128MB. You can change that value by
+setting this value.  The value should be a multiple of 64.
+
+=item * extra-libs
+
+If you would like to include shared library files, specify the fully
+qualified path names (in your development environment) of those files
+here. These files will be copied and bundled with your Lambda package
+for deployment into the F</opt/lib> directory.
+
+=back
+
+=head1 SEE ALSO
+
+ plambda help
+
+=cut

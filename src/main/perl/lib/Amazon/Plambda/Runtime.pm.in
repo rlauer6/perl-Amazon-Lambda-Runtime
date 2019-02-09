@@ -1,0 +1,43 @@
+package Amazon::Plambda::Runtime;
+
+use strict;
+use warnings;
+
+use parent qw/Amazon::Plambda::Config/;
+
+# --- 
+# alias: zbar
+# extra-libs: 
+#   - /usr/lib64/libzbar.so.0
+#   - /usr/lib64/libXv.so.1
+#   - /usr/lib64/libGraphicsMagickWand.so.2
+#   - /usr/lib64/libwebpmux.so.0
+#   - /usr/lib64/libGraphicsMagick.so.3
+#   - /usr/lib64/libwebp.so.4
+#   - /usr/local/lib/libMagickCore-6.Q16.so.2
+#   - /lib64/libm.so.6
+#   - /lib64/libc.so.6
+#   - /lib64/libbz2.so.1
+#   - /lib64/libz.so.1
+#   - /lib64/libgcc_s.so.1
+#   - /lib64/libpthread.so.0
+#   - /lib64/libuuid.so.1
+#   - /lib64/libdl.so.2
+# perl: 
+#   version: 5.28.1
+
+my @CONFIG_VARS = qw/alias extra-libs perl scandeps cpan/;
+
+__PACKAGE__->follow_best_practice;
+__PACKAGE__->mk_accessors(@CONFIG_VARS);
+
+sub new {
+  my $class = shift;
+  my $args = shift || {};
+  
+  $args->{config_vars} = \@CONFIG_VARS;
+  
+  $class->SUPER::new($args);
+}
+
+1;

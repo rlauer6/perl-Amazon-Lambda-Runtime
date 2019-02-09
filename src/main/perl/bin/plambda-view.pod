@@ -1,0 +1,24 @@
+=pod
+
+=head1 NAME
+
+view
+
+=head1 SYNOPSIS
+
+ plambda view lamba
+
+=head1 DESCRIPTION
+
+Downloads the most recent version of your Lambda and prints to STDOUT.
+
+=head1 PARAMETERS
+
+None.
+
+=head1 OPTIONS
+
+None.
+
+=cut
+

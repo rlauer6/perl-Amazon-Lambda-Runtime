@@ -90,7 +90,8 @@ In order to create a Perl Lambda we'll need:
    the Perl dependencies you need and continue to use the system
    `perl`...or you could create a layer containing a newer, complete
    version of `perl`. The latter mechanism being a more desirable
-   method.  1. An IAM role for your Lambda
+   method.
+ 1. An IAM role for your Lambda
 
    >_"A Lambda function requires an execution role created in IAM that
    provides the function with the necessary permissions to run."_

@@ -83,7 +83,7 @@ language directly...including Perl.  Hence this project.
 
 # Project Details
 
-In order to create a Perl Lambda we'll need:
+In order to create a Perl Lambda you need:
 
 1. An AWS _custom runtime_
 
@@ -94,7 +94,7 @@ In order to create a Perl Lambda we'll need:
    of the current event. You can see a reference implementation in
    `bash` that the folks at AWS provide as a guide
    [here](https://docs.aws.amazon.com/lambda/latest/dg/runtimes-walkthrough.html). This
-   project will implement something we'll call the _Custom Perl
+   project will implement something I'll call the _Custom Perl
    Runtime Layer_ or *CPRL*.
 1. A handler, written in Perl that acts as your Lambda function
 
@@ -262,19 +262,12 @@ experience with:
 * `App::cpanminus`
 * ...and many others
 
-I think we can assume that the consumers of this project will be Perl
+I think it can be assumed that the consumers of this project will be Perl
 programmers who wish to interact with AWS cloud resources.  Therefore,
 it will also be assumed that you are familiar with installing Perl
 modules.  The project provides a _cpanfile_ named `plambda-cpanfile`
 you can use to install the necessary Perl modules that support the
 _plambda_ framework.
-
-Install `App::cpanminus` first and then use `plambda-cpanfile` to
-install the remaining dependencies.
-
-```
-cpanm --cpanfile plambda-cpanfile --installdeps .
-```
 
 ### GNU Utilities
 
@@ -284,7 +277,6 @@ You will also need to have handy the GNU `automake` tools which should
 be available on all *nix distros.  Depending on _how you roll_ you may
 have success with simply using the system package manager (`yum`,
 `apt`, `pkg`, etc) to install many of the dependencies listed below.
-
 
 ### AWS CLI Environment
 
@@ -362,7 +354,8 @@ that mimics the Lamdbda runtime environment.](#hints-and-tips)
 # Installation
 
 After you've installed all of the project dependencies, install the
-project by first cloning the project and creating a distribution tarball.
+project by first cloning the project and creating a distribution
+tarball. Install the Perl module dependencies listed in _plambda-cpanfile_.
 
 ```
 git clone https://github.com/rlauer6/perl-Amazon-Lambda-Runtime.git
@@ -373,7 +366,7 @@ autoreconf -i --force
 make dist
 ```
 
-If you see errors similar to this:
+If you see errors similar to this during the configure phase:
 
 `configure: error: cpanm  not found?`
 
@@ -400,6 +393,17 @@ PATH=$PATH:~/plambda/bin
 ./install-framework ~/plambda
 ```
 
+You should now have installed the necessary plumbing to create a
+custom runtime and Perl Lambdas.  The framework includes a script
+named _plambda_ that will assist in this process.
+
+You can get help with any `plambda` command by providing the command name
+followed by `help`.
+
+```
+plambda init help
+```
+
 # Configuring, Building and Invoking Your Lambda
 
 ## Summary
@@ -420,13 +424,6 @@ the `plambda` utility.
 
 ```
 plambda init > buildspec.yml
-```
-
-You can get help with any `plambda` command by providing the command name
-followed by `help`.
-
-```
-plambda init help
 ```
 
 Inspect and edit your `buildspec.yml` and customize as per your
@@ -563,12 +560,12 @@ to installation to the AWS environment.
 
 ```
 plambda build runtime
-unzip -l .plambda/perl-runtime.zip | less
+unzip -l ~/.plambda/perl-runtime.zip | less
 ```
 
 ```
 plambda build lambda
-unzip -l .plambda/Lambda.zip | less
+unzip -l ~/.plambda/Lambda.zip | less
 ```
 
 Execute the `state` command to report the current state of your Lambda
@@ -586,12 +583,12 @@ command has some nice features that make it somewhat more convenient
 than using the AWS CLI. Try `plambda invoke help` for more details.
 
 Typically, Lambdas are not invoked by the CLI but rather as a result
-of an event that has occurred.  For example, you can map an S3 event
-like `PutObject` to a Lambda to execute some operation of an object
+of an AWS event.  For example, you can map an S3 event
+like `PutObject` to a Lambda to execute some operation on an object
 that has landed in S3. See [AWS Lambda Event Source
 Mapping](https://docs.aws.amazon.com/lambda/latest/dg/intro-invocation-modes.html).
 
-For testing your Lambdas however, you can simulate an event by
+For testing your Lambdas, you can simulate an event by
 supplying an event object as the payload and using the `invoke`
 command.  The Lambda console can also be used to test your Lambda and
 configure test events that mimick actual AWS events.
@@ -606,11 +603,11 @@ plambda invoke payload '{"text":"Hello"}' outfile lambda.out
 aws lambda invoke --payload '{"text":"Hello"}' --function-name Lambda lambda.out
 ```
 
-The return value of your Lambda is written to the file `lambda.out`.
-You'll see the return code from the invoke method on STDOUT.
+The return value of your Lambda is written to the file `lambda.out` in
+the exmple above. You'll see the return code from the invoke method on STDOUT.
 
-You can view the Lambda logs by visiting the AWS console and accessing
-the CloudWatch service page and clicking on the _Logs_ link.  This
+You can view the Lambda logs by visiting the AWS console, accessing
+the CloudWatch service page, and clicking on the _Logs_ link.  This
 will allow you to inspect the log stream created by the invocation of
 your Lambda.  You might want to [check out this
 project](https://github.com/jorgebastida/awslogs) for a CLI method of
@@ -637,7 +634,7 @@ option when you build or install the Lambda package. You can set an
 environment variable (`NO_SCANDEPS`) which will also prevent
 overwriting your cpanfile.
 
-You can report whether or not your Lambda need to be rebuilt by
+You can report whether or not your Lambda needs to be rebuilt by
 executing the `install` command with the `--dryrun` option.
 
 ```
@@ -660,8 +657,9 @@ development environment.
 '--------+-----------+-----------+------------+------------------'
 ```
 
-Columns will be color coded to suggest the current state and
-potential actions you might want to take.
+Columns in the output of the `state` commnand are color coded to
+suggest the current state and potential actions you might want to
+take.
 
 * Module
   * green => current
@@ -674,6 +672,7 @@ potential actions you might want to take.
 * CPRL
   * green => current
   * red => re-build/re-install
+  * yellow => CPRL/Lambda configuration in sync, but no runtime in your working tree
   * --- => not installed
 
 A typical development cycle looks like this:

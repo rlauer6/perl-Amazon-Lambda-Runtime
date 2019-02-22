@@ -108,7 +108,7 @@ In order to create a Perl Lambda you need:
    use strict;
    use warnings;
    
-   use parent qw/Amazon::Lambda/Runtime/;
+   use parent qw/Amazon::Lambda::Runtime/;
 
    sub handler {
      my $self = shift;
